@@ -11,7 +11,7 @@ from PIL import Image
 from celery import shared_task
 
 from . import (estimate_parse, gemini_config, pool_mode, qto_engine, selection,
-               stage2, store)
+               stage2, store, zones)
 from .stage2 import legend_comparison
 
 
@@ -33,9 +33,11 @@ def _load_pool_targets(job_id: str) -> dict | None:
 
 
 def _persist_masks(job_id: str, page: int, masks: dict, scale: float, dpi: int = 150) -> None:
-    """Save per-code zone masks as one label image (pixel = code index) so a
-    later click can identify & remove a region. Masks are non-overlapping."""
+    """Save per-code zone masks as one label image (pixel = code index) and seed
+    the per-zone DB rows (one row per connected component, with a stable id).
+    The zones table is the source of truth for editing/rendering thereafter."""
     if not masks:
+        store.replace_zones(job_id, page, [])
         return
     codes = list(masks.keys())
     h, w = next(iter(masks.values())).shape
@@ -44,6 +46,9 @@ def _persist_masks(job_id: str, page: int, masks: dict, scale: float, dpi: int =
         label[masks[c] > 0] = i + 1
     np.savez_compressed(store.masks_path(job_id, page), label=label,
                         codes=np.array(codes), scale=float(scale), dpi=int(dpi))
+    zlist = zones.extract_zones_from_label(label, codes, float(scale), int(dpi),
+                                           source="engine")
+    store.replace_zones(job_id, page, zlist)
 
 # QTO reference values (the lead's `known` dict + our QTO legend) for the
 # engine-path validation table.
@@ -157,6 +162,7 @@ def run_stage2(job_id: str, page: int) -> dict:
             # Pool mode: estimate-guided pool/spa surface detection (raw B&W pool
             # sheet, no tags). Scale auto-calibrated from the estimate targets.
             res = pool_mode.detect_pool(pdf, page, pool_targets, out, dpi=120)
+            store.replace_zones(job_id, page, [])  # pool path not zone-addressable yet
             groups = [
                 {"label": s["name"], "sqft": s["area_sf"], "regions": 1,
                  "perimeter_lf": s.get("perimeter_lf"),
@@ -172,15 +178,14 @@ def run_stage2(job_id: str, page: int) -> dict:
                 groups=groups,
             )
         elif sheet_cfg and not chromatic:
-            # Engine path: line-width zones + connected components (the lead's method)
+            # Engine path: line-width zones + connected components (the lead's method).
+            # Seed per-zone rows, then render the overlay + totals FROM the zones so
+            # the initial view matches the (zone-based) editing model exactly.
             res = qto_engine.run_sheet(pdf, page, sheet_cfg, out)
             _persist_masks(job_id, page, res.get("masks", {}), res["scale_in_per_ft"])
-            groups = [
-                {"label": code, "sqft": sqft, "regions": 1,
-                 "hex": "#%02x%02x%02x" % qto_engine.code_color_rgb(code)}
-                for code, sqft in sorted(res["areas"].items(),
-                                         key=lambda kv: -kv[1])
-            ]
+            active = store.active_zones(job_id, page)
+            zres = zones.render_from_zones(pdf, page, active, out)
+            groups = zres["groups"]
             sid = sheet_cfg["sheet_id"]
             status.update(
                 status="done", overlay=f"overlay_p{page}.png", method="engine",
@@ -194,6 +199,7 @@ def run_stage2(job_id: str, page: int) -> dict:
         else:
             # Fallback: existing color-grouping / label-seeding
             res = stage2.detect_color_regions(pdf, page, out)
+            store.replace_zones(job_id, page, [])  # color path not zone-addressable yet
             status.update(status="done", overlay=f"overlay_p{page}.png", **{
                 "vector": res["vector"], "message": res["message"], "groups": res["groups"],
                 "comparison": res.get("comparison"),
@@ -209,162 +215,136 @@ def _open_page(pdf_path, page: int):
     return fitz.open(pdf_path)[page]
 
 
-def _load_label(job_id: str, page: int):
-    z = np.load(store.masks_path(job_id, page), allow_pickle=False)
-    return z["label"].copy(), [str(c) for c in z["codes"]], float(z["scale"]), int(z["dpi"])
-
-
-def _save_label(path, label, codes, scale, dpi) -> None:
-    np.savez_compressed(path, label=label, codes=np.array(codes), scale=scale, dpi=dpi)
-
-
-def _apply_label(job_id, page, label, codes, scale, dpi, note) -> dict:
-    """Recompute areas + masks from the edited label image, re-render the
-    overlay, and update + return the Stage-2 status."""
-    h, w = label.shape
-    areas, masks = {}, {}
-    for i, c in enumerate(codes):
-        m = label == (i + 1)
-        px = int(m.sum())
-        if px > 0:
-            areas[c] = round(qto_engine.px_to_sqft(px, dpi, scale), 1)
-            masks[c] = m
-
-    pdf = store.pdf_path(job_id)
-    doc = fitz.open(pdf)
-    pix = doc[page].get_pixmap(dpi=dpi)
+def _page_dims(job_id: str, page: int) -> tuple[float, float]:
+    """Base-page size in PDF points (for fractional-click -> point hit testing)."""
+    doc = fitz.open(store.pdf_path(job_id))
+    r = doc[page].rect
     doc.close()
-    base = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)[:, :, :3].copy()
-    if base.shape[:2] != (h, w):
-        base = cv2.resize(base, (w, h))
-    over = base.copy()
-    for c, m in masks.items():
-        over[m] = qto_engine.code_color_rgb(c)
-    blended = cv2.addWeighted(base, 0.45, over, 0.55, 0)
-    if blended.shape[1] > 2200:
-        nh = int(blended.shape[0] * 2200 / blended.shape[1])
-        blended = cv2.resize(blended, (2200, nh))
-    Image.fromarray(blended).save(store.stage2_dir(job_id) / f"overlay_p{page}.png")
+    return r.width, r.height
 
+
+def _rerender_from_zones(job_id: str, page: int, note: str | None = None,
+                         deleted_ids: list[str] | None = None) -> dict:
+    """Rebuild the overlay + per-code totals from the page's ACTIVE zones and
+    refresh the Stage-2 status. The zones table is the single source of truth, so
+    every edit (click or delete-by-id) funnels through here."""
+    pdf = store.pdf_path(job_id)
+    active = store.active_zones(job_id, page)
+    out = store.stage2_dir(job_id) / f"overlay_p{page}.png"
     status = store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
-    groups = [{"label": c, "sqft": s, "regions": 1,
-               "hex": "#%02x%02x%02x" % qto_engine.code_color_rgb(c)}
-              for c, s in sorted(areas.items(), key=lambda kv: -kv[1])]
+    status["status"] = "done"
+    try:
+        # re-render the overlay + totals from the base plan and active zones
+        res = zones.render_from_zones(pdf, page, active, out)
+        status["overlay"] = f"overlay_p{page}.png"
+        status["comparison"] = legend_comparison(_open_page(pdf, page), res["groups"])
+        groups = res["groups"]
+    except Exception:  # noqa: BLE001 — base PDF missing/unreadable: still update totals
+        groups = zones.groups_from_zones(active)
     status["groups"] = groups
-    status["comparison"] = legend_comparison(_open_page(pdf, page), groups)
     if status.get("sheet"):
+        areas = {g["label"]: g["sqft"] for g in groups}
         status["validation"] = _build_validation(status["sheet"], areas)
-    status["edit_note"] = note
-    status["can_undo"] = store.masks_undo_path(job_id, page).exists()
+    if note is not None:
+        status["edit_note"] = note
+    if deleted_ids is not None:
+        status["last_deleted_ids"] = deleted_ids
+    status["can_undo"] = bool(status.get("last_deleted_ids"))
     store.write_stage2(job_id, page, status)
     return status
 
 
+def _zone_at(job_id: str, page: int, fx: float, fy: float) -> dict | None:
+    """The smallest active zone whose polygon contains the fractional click."""
+    active = store.active_zones(job_id, page)
+    if not active:
+        return None
+    W, H = _page_dims(job_id, page)
+    px, py = fx * W, fy * H
+    hit, hit_area = None, float("inf")
+    for z in active:
+        for poly in z.get("geometry") or []:
+            cont = np.array(poly, dtype=np.float32)
+            if len(cont) >= 3 and cv2.pointPolygonTest(cont, (float(px), float(py)), False) >= 0:
+                a = z.get("area_sqft") or 0.0
+                if a < hit_area:
+                    hit, hit_area = z, a
+                break
+    return hit
+
+
 def pick_region(job_id: str, page: int, fx: float, fy: float) -> dict:
-    """Identify (but don't remove) the zone at the click — for select+confirm.
-    Returns {code, area, bbox:[fx0,fy0,fx1,fy1]} or {code: None}."""
-    if not store.masks_path(job_id, page).exists():
-        return {"code": None}
-    label, codes, scale, dpi = _load_label(job_id, page)
-    h, w = label.shape
-    mx = min(max(int(fx * w), 0), w - 1)
-    my = min(max(int(fy * h), 0), h - 1)
-    cidx = int(label[my, mx])
-    if cidx == 0:
-        return {"code": None}
-    code = codes[cidx - 1]
-    _n, lbl, stats, _c = cv2.connectedComponentsWithStats((label == cidx).astype(np.uint8), 8)
-    comp = int(lbl[my, mx])
-    x, y = int(stats[comp, cv2.CC_STAT_LEFT]), int(stats[comp, cv2.CC_STAT_TOP])
-    cw, ch = int(stats[comp, cv2.CC_STAT_WIDTH]), int(stats[comp, cv2.CC_STAT_HEIGHT])
-    area = qto_engine.px_to_sqft(int(stats[comp, cv2.CC_STAT_AREA]), dpi, scale)
-    return {"code": code, "area": round(area, 1),
-            "bbox": [x / w, y / h, (x + cw) / w, (y + ch) / h]}
+    """Identify (but don't remove) the zone at the click — returns its id, code,
+    area and bbox, or {id: None} when the click is on no zone."""
+    z = _zone_at(job_id, page, fx, fy)
+    if z is None:
+        return {"id": None, "code": None}
+    return {"id": z["id"], "code": z["code"], "area": z.get("area_sqft"),
+            "bbox": z.get("bbox")}
 
 
 def remove_region(job_id: str, page: int, fx: float, fy: float) -> dict:
-    """Remove the single zone (connected component) clicked at (fx, fy)."""
-    if not store.masks_path(job_id, page).exists():
-        return store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
-    label, codes, scale, dpi = _load_label(job_id, page)
-    h, w = label.shape
-    mx = min(max(int(fx * w), 0), w - 1)
-    my = min(max(int(fy * h), 0), h - 1)
-    cidx = int(label[my, mx])
-    if cidx == 0:
+    """Soft-delete the single zone clicked at (fx, fy)."""
+    z = _zone_at(job_id, page, fx, fy)
+    if z is None:
         s = store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
         s["edit_note"] = "Nothing to remove there."
         return s
-    code = codes[cidx - 1]
-    _n, lbl, stats, _c = cv2.connectedComponentsWithStats((label == cidx).astype(np.uint8), 8)
-    comp = int(lbl[my, mx])
-    removed_sf = qto_engine.px_to_sqft(int(stats[comp, cv2.CC_STAT_AREA]), dpi, scale)
-    _save_label(store.masks_undo_path(job_id, page), label, codes, scale, dpi)  # undo backup
-    label[lbl == comp] = 0
-    _save_label(store.masks_path(job_id, page), label, codes, scale, dpi)
-    return _apply_label(job_id, page, label, codes, scale, dpi,
-                        f"Removed {removed_sf:.0f} sq ft from {code}.")
+    store.set_zone_status(z["id"], "deleted")
+    return _rerender_from_zones(
+        job_id, page, f"Removed {z.get('area_sqft') or 0:.0f} sq ft from {z['code']}.",
+        [z["id"]])
 
 
 def remove_material(job_id: str, page: int, code: str) -> dict:
-    """Remove ALL shaded zones of one material code."""
-    if not store.masks_path(job_id, page).exists():
-        return store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
-    label, codes, scale, dpi = _load_label(job_id, page)
-    if code not in codes:
+    """Soft-delete ALL active zones of one material code."""
+    ids = store.set_zones_status_by_code(job_id, page, code, "deleted")
+    if not ids:
         s = store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
         s["edit_note"] = f"{code} not on this page."
         return s
-    cidx = codes.index(code) + 1
-    removed_sf = qto_engine.px_to_sqft(int((label == cidx).sum()), dpi, scale)
-    _save_label(store.masks_undo_path(job_id, page), label, codes, scale, dpi)  # undo backup
-    label[label == cidx] = 0
-    _save_label(store.masks_path(job_id, page), label, codes, scale, dpi)
-    return _apply_label(job_id, page, label, codes, scale, dpi,
-                        f"Removed all of {code} ({removed_sf:.0f} sq ft).")
+    return _rerender_from_zones(job_id, page,
+                                f"Removed all of {code} ({len(ids)} zone(s)).", ids)
 
 
 def remove_batch(job_id: str, page: int, points: list) -> dict:
-    """Remove every zone hit by the list of clicks (multi-select delete) in one
-    pass — one undo backup, one re-render."""
-    if not store.masks_path(job_id, page).exists():
-        return store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
-    label, codes, scale, dpi = _load_label(job_id, page)
-    h, w = label.shape
-    _save_label(store.masks_undo_path(job_id, page), label, codes, scale, dpi)  # undo backup
-    to_zero = np.zeros_like(label, dtype=bool)
-    n_zones = 0
+    """Soft-delete every zone hit by the list of clicks (multi-select)."""
+    ids: list[str] = []
     for pt in points:
-        mx = min(max(int(float(pt["x"]) * w), 0), w - 1)
-        my = min(max(int(float(pt["y"]) * h), 0), h - 1)
-        cidx = int(label[my, mx])
-        if cidx == 0:
-            continue
-        _n, lbl, _s, _c = cv2.connectedComponentsWithStats((label == cidx).astype(np.uint8), 8)
-        comp = int(lbl[my, mx])
-        sel = lbl == comp
-        if not (to_zero & sel).any():
-            n_zones += 1
-        to_zero |= sel
-    label[to_zero] = 0
-    _save_label(store.masks_path(job_id, page), label, codes, scale, dpi)
-    removed_sf = qto_engine.px_to_sqft(int(to_zero.sum()), dpi, scale)
-    return _apply_label(job_id, page, label, codes, scale, dpi,
-                        f"Removed {n_zones} zone(s) — {removed_sf:.0f} sq ft.")
+        z = _zone_at(job_id, page, float(pt["x"]), float(pt["y"]))
+        if z is not None and z["id"] not in ids:
+            ids.append(z["id"])
+    for zid in ids:
+        store.set_zone_status(zid, "deleted")
+    return _rerender_from_zones(job_id, page, f"Removed {len(ids)} zone(s).", ids)
+
+
+def delete_zone(job_id: str, zone_id: str) -> dict:
+    """Soft-delete one zone by id (the addressable delete)."""
+    info = store.set_zone_status(zone_id, "deleted")
+    if info is None:
+        return {"error": "unknown zone id"}
+    return _rerender_from_zones(info["job_id"], info["page"],
+                                f"Removed zone {zone_id[:8]} ({info['code']}).", [zone_id])
+
+
+def restore_zone(job_id: str, zone_id: str) -> dict:
+    """Restore a soft-deleted zone by id."""
+    info = store.set_zone_status(zone_id, "active")
+    if info is None:
+        return {"error": "unknown zone id"}
+    return _rerender_from_zones(info["job_id"], info["page"],
+                                f"Restored zone {zone_id[:8]} ({info['code']}).")
 
 
 def undo_last(job_id: str, page: int) -> dict:
-    """Restore the label from the one-level undo backup."""
-    up = store.masks_undo_path(job_id, page)
-    if not up.exists():
-        s = store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
+    """Restore the zones removed in the last delete (one-level undo)."""
+    s = store.read_stage2(job_id, page) or {"job_id": job_id, "page": page}
+    ids = s.get("last_deleted_ids") or []
+    if not ids:
         s["edit_note"] = "Nothing to undo."
         s["can_undo"] = False
         return s
-    z = np.load(up, allow_pickle=False)
-    label = z["label"].copy()
-    codes = [str(c) for c in z["codes"]]
-    scale, dpi = float(z["scale"]), int(z["dpi"])
-    _save_label(store.masks_path(job_id, page), label, codes, scale, dpi)
-    up.unlink()  # consume (single-level undo)
-    return _apply_label(job_id, page, label, codes, scale, dpi, "Undid last removal.")
+    for zid in ids:
+        store.set_zone_status(zid, "active")
+    return _rerender_from_zones(job_id, page, "Undid last removal.", [])

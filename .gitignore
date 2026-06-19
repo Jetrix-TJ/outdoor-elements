@@ -37,3 +37,7 @@ Thumbs.db
 _*.png
 _*.py
 *.npz
+
+# --- Renderer golden outputs (regenerable from the .json) ---
+oe_qto_render/golden/*.svg
+oe_qto_render/golden/*.pdf

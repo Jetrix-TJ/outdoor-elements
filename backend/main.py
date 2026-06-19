@@ -204,6 +204,39 @@ def undo_edit(job_id: str, page: int) -> dict:
     return undo_last(job_id, page)
 
 
+# ---------- Per-zone addressing: list / delete-by-id / restore ----------
+@app.get("/api/jobs/{job_id}/stage2/{page}/zones")
+def list_zones(job_id: str, page: int, include_deleted: bool = False) -> dict:
+    """All zones for a page, each with its stable id (for select + delete)."""
+    return {"zones": store.list_zones(job_id, page, include_deleted=include_deleted)}
+
+
+@app.get("/api/jobs/{job_id}/zones/{zone_id}")
+def get_zone(job_id: str, zone_id: str) -> dict:
+    z = store.get_zone(zone_id)
+    if z is None or z["job_id"] != job_id:
+        raise HTTPException(status_code=404, detail="Unknown zone id.")
+    return z
+
+
+@app.delete("/api/jobs/{job_id}/zones/{zone_id}")
+def delete_zone_by_id(job_id: str, zone_id: str) -> dict:
+    z = store.get_zone(zone_id)
+    if z is None or z["job_id"] != job_id:
+        raise HTTPException(status_code=404, detail="Unknown zone id.")
+    from .tasks import delete_zone
+    return delete_zone(job_id, zone_id)
+
+
+@app.post("/api/jobs/{job_id}/zones/{zone_id}/restore")
+def restore_zone_by_id(job_id: str, zone_id: str) -> dict:
+    z = store.get_zone(zone_id)
+    if z is None or z["job_id"] != job_id:
+        raise HTTPException(status_code=404, detail="Unknown zone id.")
+    from .tasks import restore_zone
+    return restore_zone(job_id, zone_id)
+
+
 # ---------- Pricing: quantities × unit rates → costed estimate ----------
 class RateEdit(BaseModel):
     code: str

@@ -57,11 +57,13 @@ class PlanData(BaseModel):
             el = style.BY_KEY.get(key)
             if el is None:
                 raise ValueError(f"unknown element key: {key!r}")
+            # require the matching geometry FIELD be present (may be empty: the
+            # legend value still renders even with no drawn geometry).
             if el.geometry is Geometry.LINEAR and key != "light_run":
-                if not data.segments:
+                if data.segments is None:
                     raise ValueError(f"{key}: linear element needs `segments`")
             elif el.geometry is Geometry.AREA:
-                if not data.polygons:
+                if data.polygons is None:
                     raise ValueError(f"{key}: area element needs `polygons`")
             elif el.geometry is Geometry.POINT:
                 if data.points is None:

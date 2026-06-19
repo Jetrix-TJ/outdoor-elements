@@ -235,6 +235,32 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
   background: var(--primary); color: #fff; font-size: 11px; font-weight: 500;
   padding: 1px 7px; border-radius: 5px; white-space: nowrap; box-shadow: var(--elev-1);
 }
+.hover-box { border-color: var(--green); background: rgba(52,168,83,.16); animation: none; }
+
+/* ── per-zone list (id-addressable, delete / restore) ─────────────────── */
+.zones-block { margin-top: 18px; border-top: 1px solid var(--border); padding-top: 14px; }
+.zonelist { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; max-height: 340px; overflow: auto; }
+.zonerow { display: flex; align-items: center; gap: 9px; font-size: 13px; padding: 6px; border-radius: 8px; cursor: default; transition: background var(--dur-fast) var(--ease); }
+.zonerow:hover, .zonerow.hot { background: var(--surface-tint); }
+.zonerow .swatch { width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(0,0,0,.15); flex: 0 0 auto; }
+.zonerow code { font-size: 12px; min-width: 40px; color: var(--text); }
+.zonerow .zid { font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.zonerow .sqft { font-size: 12px; color: var(--primary); font-weight: 500; margin-left: auto; font-variant-numeric: tabular-nums; }
+.zonerow .trash, .zonerow .restore {
+  background: transparent; border: none; cursor: pointer; color: var(--muted);
+  opacity: .7; padding: 2px 4px; display: inline-flex; margin-left: 4px;
+  transition: color var(--dur-fast) var(--ease), opacity var(--dur-fast) var(--ease);
+}
+.zonerow .trash { margin-left: 4px; }
+.zonerow .sqft + .trash { margin-left: 4px; }
+.zonerow .trash:hover { opacity: 1; color: var(--danger); }
+.zonerow .restore:hover { opacity: 1; color: var(--primary); }
+.zonerow.gone { opacity: .6; }
+.zonerow.gone code { text-decoration: line-through; }
+.deleted-zones { margin-top: 10px; }
+.deleted-zones summary { font-size: 12px; color: var(--muted); cursor: pointer; padding: 4px 0; }
+.zonerow .material-symbols-outlined { font-size: 18px; }
+
 /* Vortex-style floating selection bar (bottom-center of the drawing) */
 .select-bar {
   position: absolute; bottom: 18px; left: 50%; transform: translateX(-50%);

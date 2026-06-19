@@ -128,6 +128,78 @@ def read_stage2(job_id: str, page: int) -> dict | None:
         return row.data if row else None
 
 
+# ── Postgres: per-zone rows (individually addressable, soft-deletable) ───────
+def replace_zones(job_id: str, page: int, zones: list[dict]) -> list[str]:
+    """Replace all zones for a (job, page) with a fresh detection. Returns the
+    new zone ids (assigned here if a row omits `id`)."""
+    from sqlalchemy import delete as _delete
+    ids: list[str] = []
+    with db.session() as s:
+        _get_or_create(s, job_id)
+        s.execute(_delete(db.Zone).where(db.Zone.job_id == job_id, db.Zone.page == page))
+        for z in zones:
+            zid = z.get("id") or uuid.uuid4().hex[:16]
+            ids.append(zid)
+            s.add(db.Zone(
+                id=zid, job_id=job_id, page=page, code=z["code"], hex=z.get("hex"),
+                area_sqft=z.get("area_sqft"), perimeter_lf=z.get("perimeter_lf"),
+                geometry=z.get("geometry"), bbox=z.get("bbox"),
+                source=z.get("source"), status=z.get("status", "active")))
+    return ids
+
+
+def list_zones(job_id: str, page: int, include_deleted: bool = False) -> list[dict]:
+    with db.session() as s:
+        q = s.query(db.Zone).filter(db.Zone.job_id == job_id, db.Zone.page == page)
+        if not include_deleted:
+            q = q.filter(db.Zone.status == "active")
+        return [_zone_to_dict(z) for z in q.order_by(db.Zone.area_sqft.desc().nullslast())]
+
+
+def active_zones(job_id: str, page: int) -> list[dict]:
+    return list_zones(job_id, page, include_deleted=False)
+
+
+def get_zone(zone_id: str) -> dict | None:
+    with db.session() as s:
+        z = s.get(db.Zone, zone_id)
+        return _zone_to_dict(z) if z else None
+
+
+def set_zone_status(zone_id: str, status: str) -> dict | None:
+    """Flip a zone's status (active|deleted). Returns the zone's (job_id, page)
+    so the caller can re-render, or None if the id is unknown."""
+    with db.session() as s:
+        z = s.get(db.Zone, zone_id)
+        if z is None:
+            return None
+        z.status = status
+        return {"job_id": z.job_id, "page": z.page, "code": z.code}
+
+
+def set_zones_status_by_code(job_id: str, page: int, code: str, status: str) -> list[str]:
+    """Flip every active/deleted zone of one code to `status`. Returns the ids
+    affected (so the caller can record them for undo)."""
+    opposite = "deleted" if status == "active" else "active"
+    with db.session() as s:
+        rows = (s.query(db.Zone)
+                .filter(db.Zone.job_id == job_id, db.Zone.page == page,
+                        db.Zone.code == code, db.Zone.status == opposite)
+                .all())
+        ids = []
+        for z in rows:
+            z.status = status
+            ids.append(z.id)
+        return ids
+
+
+def _zone_to_dict(z: "db.Zone") -> dict:
+    return {"id": z.id, "job_id": z.job_id, "page": z.page, "code": z.code,
+            "hex": z.hex, "area_sqft": z.area_sqft, "perimeter_lf": z.perimeter_lf,
+            "geometry": z.geometry, "bbox": z.bbox, "source": z.source,
+            "status": z.status}
+
+
 def sheet_cfg_for_page(cfg: dict, page_index: int) -> dict | None:
     """Build the per-sheet qto_engine config for a 0-based page, merging the
     top-level config (tag pattern, clip %, phase params) with the matching
@@ -154,6 +226,8 @@ def sheet_cfg_for_page(cfg: dict, page_index: int) -> dict | None:
                 "phase2_force_expand_codes": info.get("phase2_force_expand_codes"),
                 "tag_position_overrides": info.get("tag_position_overrides"),
                 "hatch_cc_codes": info.get("hatch_cc_codes"),
+                "hatch_detect_codes": info.get("hatch_detect_codes"),
+                "gray_fill_diff": info.get("gray_fill_diff", 20),
                 "hatch_min_zone_sf": info.get("hatch_min_zone_sf", 50.0),
                 "hatch_max_zone_sf": info.get("hatch_max_zone_sf"),
                 "hatch_zone_search_in": info.get("hatch_zone_search_in", 3.0),

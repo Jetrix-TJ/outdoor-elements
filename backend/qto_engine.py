@@ -493,6 +493,65 @@ def run_sheet(pdf_path, page_idx, sheet_cfg: dict, out_png, dpi: int = 150) -> d
         phase2_skip_codes=set(sk_codes) if sk_codes else None,
     )
 
+    # ── Phase 3: grayscale flood-fill for open-boundary hatch materials ──────────
+    # Faithful port of the lead's Phase 3 (outdoor_qto.py). Materials like gravel,
+    # DG or turf have no fully-closed vector boundary, so Phase 1/2 only finds a
+    # fragment. Flood-fill the rendered gray image from each tag pixel within a
+    # tonal tolerance (`gray_fill_diff`) to trace the hatch zone's extent. Applied
+    # only to codes in `hatch_detect_codes`. (Companion to Phase 3b below, which is
+    # triggered by `hatch_cc_codes`.)
+    phase3_codes = set(sheet_cfg.get("hatch_detect_codes") or [])
+    phase3_diff = int(sheet_cfg.get("gray_fill_diff", 20))
+    if phase3_codes:
+        pt_to_px = dpi / 72.0
+        px_per_sf = (scale * dpi) ** 2
+        p3_min_sf = float(sheet_cfg.get("hatch_min_zone_sf") or 50.0)
+        _p3max = sheet_cfg.get("hatch_max_zone_sf")
+        p3_max_sf = float(_p3max) if _p3max else h * w / px_per_sf * 0.30
+
+        doc = fitz.open(pdf_path)
+        pix = doc[page_idx].get_pixmap(dpi=dpi)
+        doc.close()
+        gray_base = np.frombuffer(pix.samples, np.uint8).reshape(
+            pix.height, pix.width, pix.n)[:, :, :3]
+        gray_base = cv2.cvtColor(gray_base, cv2.COLOR_RGB2GRAY)
+        if gray_base.shape != (h, w):
+            gray_base = cv2.resize(gray_base, (w, h))
+        gray_base = gray_base.copy()
+        # Blank out the same clipped margins used for binary/hatch_dark so a fill
+        # can't escape into the title block / legend column / page edges.
+        gray_base[:, rclip:] = 255
+        if lclip > 0:
+            gray_base[:, :lclip] = 255
+        if tclip > 0:
+            gray_base[:tclip, :] = 255
+        if bclip < h:
+            gray_base[bclip:, :] = 255
+
+        for code in phase3_codes:
+            code_tags = [t for t in zone_tags if t["code"] == code]
+            if not code_tags:
+                continue
+            best_px, best_fill = 0, None
+            for tag in code_tags:
+                tx = min(max(int(tag["x"] * pt_to_px), 0), w - 1)
+                ty = min(max(int(tag["y"] * pt_to_px), 0), h - 1)
+                fill_mask = np.zeros((h + 2, w + 2), np.uint8)
+                cv2.floodFill(gray_base.copy(), fill_mask, (tx, ty), 128,
+                              phase3_diff, phase3_diff,
+                              cv2.FLOODFILL_MASK_ONLY | (4 << 8))
+                zone_fill = fill_mask[1:-1, 1:-1]
+                px_sum = int(np.sum(zone_fill))
+                area_sf = px_sum / px_per_sf
+                if p3_min_sf <= area_sf <= p3_max_sf and px_sum > best_px:
+                    best_px, best_fill = px_sum, zone_fill
+            if best_fill is not None:
+                old_sf = zone_px.get(code, 0) / px_per_sf
+                print(f"    Phase 3  {code}: {best_px / px_per_sf:.0f} SF via gray fill "
+                      f"(Phase 1/2 was {old_sf:.0f} SF)")
+                zone_px[code] = best_px
+                zone_masks[code] = (best_fill > 0).astype(np.uint8) * 255
+
     # ── Phase 3b: hatch-CC for hatch materials whose label is far from the zone ──
     # For codes in `hatch_cc_codes` (gravel / DG / turf with a leader-arrow callout
     # whose text label sits away from the zone): transform the text-space tag coord

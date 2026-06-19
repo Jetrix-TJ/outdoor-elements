@@ -13,8 +13,8 @@ from __future__ import annotations
 import os
 from contextlib import contextmanager
 
-from sqlalchemy import (DateTime, ForeignKey, Integer, String, create_engine,
-                        func)
+from sqlalchemy import (DateTime, Float, ForeignKey, Index, Integer, String,
+                        create_engine, func)
 from sqlalchemy import JSON
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
@@ -48,6 +48,33 @@ class Stage2Result(Base):
                                         primary_key=True)
     page: Mapped[int] = mapped_column(Integer, primary_key=True)
     data: Mapped[dict | None] = mapped_column(_Json, nullable=True)
+
+
+class Zone(Base):
+    """One detected connected region, individually addressable by `id`.
+
+    Geometry (the contour polygon, in base-page PDF points) is the source of
+    truth: the overlay and per-code totals are rebuilt from the active zones, so
+    delete-by-id just flips `status`.
+    """
+    __tablename__ = "zones"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    job_id: Mapped[str] = mapped_column(String(32), ForeignKey("jobs.job_id"),
+                                        nullable=False)
+    page: Mapped[int] = mapped_column(Integer, nullable=False)
+    code: Mapped[str] = mapped_column(String, nullable=False)
+    hex: Mapped[str | None] = mapped_column(String(7), nullable=True)
+    area_sqft: Mapped[float | None] = mapped_column(Float, nullable=True)
+    perimeter_lf: Mapped[float | None] = mapped_column(Float, nullable=True)
+    geometry: Mapped[list | None] = mapped_column(_Json, nullable=True)  # polygons in PDF pts
+    bbox: Mapped[list | None] = mapped_column(_Json, nullable=True)      # fractional [x0,y0,x1,y1]
+    source: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    status: Mapped[str] = mapped_column(String(12), nullable=False, default="active")
+    created_at = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at = mapped_column(DateTime(timezone=True), server_default=func.now(),
+                               onupdate=func.now())
+
+    __table_args__ = (Index("ix_zones_job_page_status", "job_id", "page", "status"),)
 
 
 engine = create_engine(DATABASE_URL, pool_pre_ping=True, future=True)

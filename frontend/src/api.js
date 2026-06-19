@@ -99,6 +99,23 @@ export const removeMaterial = (jobId, page, code) =>
 export const undoEdit = (jobId, page) =>
   _post(`/api/jobs/${jobId}/stage2/${page}/undo`);
 
+// ---------- Per-zone: list / delete-by-id / restore ----------
+export async function listZones(jobId, page, includeDeleted = false) {
+  const res = await fetch(
+    `/api/jobs/${jobId}/stage2/${page}/zones?include_deleted=${includeDeleted}`);
+  if (!res.ok) throw new Error("Could not load zones");
+  return (await res.json()).zones;
+}
+
+export async function deleteZone(jobId, zoneId) {
+  const res = await fetch(`/api/jobs/${jobId}/zones/${zoneId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Delete failed");
+  return res.json();
+}
+
+export const restoreZone = (jobId, zoneId) =>
+  _post(`/api/jobs/${jobId}/zones/${zoneId}/restore`);
+
 // Pricing: quantities × unit rates.
 export async function getPricing(jobId, page) {
   const res = await fetch(`/api/jobs/${jobId}/pricing?page=${page}`);

@@ -4,6 +4,7 @@ import {
   startStage2, pollStage2, stage2OverlayUrl,
   getConfig, editScale, getPricing, editRate,
   pickZone, removeMaterial, undoEdit, removeBatch,
+  listZones, deleteZone, restoreZone,
 } from "./api.js";
 
 const STAGES = [
@@ -26,13 +27,41 @@ export default function App() {
   const [picks, setPicks] = useState([]);    // selected zones [{code, area, bbox, fx, fy}]
   const [pricing, setPricing] = useState(null);  // costed estimate for the page
   const [overlayKey, setOverlayKey] = useState(0); // cache-bust for the overlay image
+  const [zones, setZones] = useState([]);          // active zones (id-addressable)
+  const [deletedZones, setDeletedZones] = useState([]); // soft-deleted zones
+  const [hoverZone, setHoverZone] = useState(null);     // zone id highlighted on the overlay
   const fileRef = useRef(null);
+
+  async function loadZones(page = s2page) {
+    if (!job?.job_id || page == null) return;
+    try {
+      const all = await listZones(job.job_id, page, true);
+      setZones(all.filter((z) => z.status === "active"));
+      setDeletedZones(all.filter((z) => z.status === "deleted"));
+    } catch { /* zones unavailable for this detection path */ }
+  }
 
   function afterEdit(updated) {
     setS2(updated);
     setPicks([]);
     setPricing(null);  // quantities changed -> pricing is stale
     setOverlayKey((k) => k + 1);  // force the overlay <img> to reload the new render
+    loadZones();
+  }
+
+  // refresh the zone list whenever a page finishes detecting
+  useEffect(() => {
+    if (s2?.status === "done") loadZones();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s2?.status, s2page]);
+
+  async function handleDeleteZone(id) {
+    try { afterEdit(await deleteZone(job.job_id, id)); }
+    catch (e) { setError(e.message); }
+  }
+  async function handleRestoreZone(id) {
+    try { afterEdit(await restoreZone(job.job_id, id)); }
+    catch (e) { setError(e.message); }
   }
 
   const inBox = (p, fx, fy) =>
@@ -324,6 +353,22 @@ export default function App() {
                   </div>
                 ))}
 
+                {/* highlight the zone hovered in the Zones panel */}
+                {(() => {
+                  const z = zones.find((z) => z.id === hoverZone);
+                  if (!z || !z.bbox) return null;
+                  return (
+                    <div
+                      className="pick-box hover-box"
+                      style={{
+                        left: `${z.bbox[0] * 100}%`, top: `${z.bbox[1] * 100}%`,
+                        width: `${(z.bbox[2] - z.bbox[0]) * 100}%`,
+                        height: `${(z.bbox[3] - z.bbox[1]) * 100}%`,
+                      }}
+                    ><span className="pick-tag">{z.code}</span></div>
+                  );
+                })()}
+
                 {/* Vortex-style floating selection bar */}
                 {editMode && picks.length > 0 && (
                   <div className="select-bar">
@@ -381,6 +426,54 @@ export default function App() {
                   <p className="muted">No colored surfaces on this page.</p>
                 )}
                 <p className="hint">Square footage measured from the vector geometry × the sheet scale.</p>
+
+                {(zones.length > 0 || deletedZones.length > 0) && (
+                  <div className="zones-block">
+                    <div className="panel-head">
+                      <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">grid_view</span></span>
+                      <h3>Zones <span className="muted">({zones.length})</span></h3>
+                    </div>
+                    <p className="hint">Each region is stored individually — select one to highlight it, delete it by id.</p>
+                    <ul className="zonelist">
+                      {zones.map((z) => (
+                        <li
+                          key={z.id} className={`zonerow ${hoverZone === z.id ? "hot" : ""}`}
+                          onMouseEnter={() => setHoverZone(z.id)}
+                          onMouseLeave={() => setHoverZone((h) => (h === z.id ? null : h))}
+                        >
+                          <span className="swatch" style={{ background: z.hex }} />
+                          <code>{z.code}</code>
+                          <span className="zid">#{z.id.slice(0, 6)}</span>
+                          {z.area_sqft ? <span className="sqft">{z.area_sqft.toLocaleString()} sq ft</span> : null}
+                          <button
+                            className="trash" title={`Delete zone ${z.id.slice(0, 6)}`}
+                            aria-label={`Delete zone ${z.id.slice(0, 6)}`}
+                            onClick={() => handleDeleteZone(z.id)}
+                          ><span className="material-symbols-outlined">delete</span></button>
+                        </li>
+                      ))}
+                    </ul>
+                    {deletedZones.length > 0 && (
+                      <details className="deleted-zones">
+                        <summary>Deleted ({deletedZones.length})</summary>
+                        <ul className="zonelist">
+                          {deletedZones.map((z) => (
+                            <li key={z.id} className="zonerow gone">
+                              <span className="swatch" style={{ background: z.hex }} />
+                              <code>{z.code}</code>
+                              <span className="zid">#{z.id.slice(0, 6)}</span>
+                              {z.area_sqft ? <span className="sqft">{z.area_sqft.toLocaleString()} sq ft</span> : null}
+                              <button
+                                className="ghost restore" title="Restore zone"
+                                onClick={() => handleRestoreZone(z.id)}
+                              ><span className="material-symbols-outlined">undo</span></button>
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}

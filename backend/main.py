@@ -15,7 +15,10 @@ from fastapi.responses import FileResponse
 
 from pydantic import BaseModel
 
-from . import db, pricing, store
+import os
+import secrets
+
+from . import db, estimate_pricing, pricing, store
 from .celery_app import EAGER
 from .schemas import JobStatus, UploadResponse
 from .tasks import (run_stage1, run_stage1_config, run_stage2, stage1_config,
@@ -52,6 +55,25 @@ def health() -> dict:
     except Exception:  # noqa: BLE001
         db_ok = False
     return {"ok": True, "eager": EAGER, "db": db_ok}
+
+
+# ---------- Passcode gate ----------
+# Single shared passcode, validated server-side (never shipped in the JS bundle).
+# Override the default with the OE_PASSCODE environment variable.
+def _passcode() -> str:
+    return os.environ.get("OE_PASSCODE", "2811")
+
+
+class LoginReq(BaseModel):
+    passcode: str
+
+
+@app.post("/api/login")
+def login(req: LoginReq) -> dict:
+    """Validate the access passcode. Constant-time compare to avoid timing leaks."""
+    if secrets.compare_digest(req.passcode.strip(), _passcode()):
+        return {"ok": True}
+    raise HTTPException(status_code=401, detail="Incorrect passcode.")
 
 
 @app.post("/api/upload", response_model=UploadResponse)
@@ -243,6 +265,26 @@ class RateEdit(BaseModel):
     rate: float
 
 
+def _estimate_src(job_id: str) -> str | None:
+    """Path to this job's pricing estimate PDF (per-job upload, else env fallback)."""
+    p = store.estimate_path(job_id)
+    if p.exists():
+        return str(p)
+    env = os.environ.get("OE_ESTIMATE_PATH")
+    return env if env and os.path.exists(env) else None
+
+
+def _estimate_rates(job_id: str) -> dict:
+    """Per-material unit rates derived from the client's estimate, or {} if none."""
+    src = _estimate_src(job_id)
+    if not src:
+        return {}
+    try:
+        return estimate_pricing.parse_estimate(src).rate_table()
+    except Exception:  # noqa: BLE001
+        return {}
+
+
 def _pricing_for(job_id: str, page: int) -> dict:
     s2 = store.read_stage2(job_id, page)
     if not s2 or not s2.get("groups"):
@@ -251,6 +293,7 @@ def _pricing_for(job_id: str, page: int) -> dict:
     rates = store.read_prices(job_id)
     cfg = store.read_config(job_id) or {}
     mats = cfg.get("materials") if isinstance(cfg.get("materials"), dict) else {}
+    est_rates = _estimate_rates(job_id)   # real rates from the client estimate
     names: dict = {}
     changed = False
     for code in areas:
@@ -258,7 +301,9 @@ def _pricing_for(job_id: str, page: int) -> dict:
         nm = info.get("name") if isinstance(info, dict) else (info if isinstance(info, str) else "")
         names[code] = nm or ""
         if code not in rates:
-            rates[code] = pricing.default_rate(code, names[code])
+            er = est_rates.get(code)
+            rates[code] = (er["rate"] if er and er.get("rate")
+                           else pricing.default_rate(code, names[code]))
             changed = True
     if changed:
         store.write_prices(job_id, rates)
@@ -276,3 +321,33 @@ def edit_rate(job_id: str, edit: RateEdit, page: int) -> dict:
     rates[edit.code] = float(edit.rate)
     store.write_prices(job_id, rates)
     return _pricing_for(job_id, page)
+
+
+@app.post("/api/jobs/{job_id}/estimate")
+async def upload_estimate(job_id: str, file: UploadFile = File(...)) -> dict:
+    """Attach the client's pricing estimate PDF to a job (drives rate derivation)."""
+    if not store.pdf_path(job_id).exists():
+        raise HTTPException(status_code=404, detail="Unknown job id.")
+    data = await file.read()
+    store.estimate_path(job_id).write_bytes(data)
+    est = estimate_pricing.parse_estimate(str(store.estimate_path(job_id)))
+    return {"ok": True, "filename": file.filename, "grand_total": est.grand_total,
+            "materials_with_rates": sum(1 for v in est.rate_table().values() if v.get("rate"))}
+
+
+@app.get("/api/jobs/{job_id}/pricing/compare")
+def pricing_compare(job_id: str, page: int) -> dict:
+    """Human estimate vs AI: price our measured quantities with the rates derived
+    from the client's estimate, line-by-line and per subsection."""
+    s2 = store.read_stage2(job_id, page)
+    if not s2 or not s2.get("groups"):
+        raise HTTPException(status_code=404, detail="Run Stage 2 for this page first.")
+    measured = {g["label"]: g["sqft"] for g in s2["groups"] if g.get("label")}
+    src = _estimate_src(job_id)
+    if not src:
+        return {"available": False,
+                "message": "No estimate attached — upload the client's pricing PDF to compare."}
+    est = estimate_pricing.parse_estimate(src)
+    cmp = estimate_pricing.price_ai(measured, est.rate_table())
+    return {"available": True, "grand_total": est.grand_total,
+            "section_totals": est.section_totals, **cmp}

@@ -1,5 +1,16 @@
 // Thin API client for the Stage 1 backend. Calls go through the Vite proxy.
 
+// Validate the access passcode against the backend (server-side check).
+export async function login(passcode) {
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ passcode }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Incorrect passcode");
+  return res.json();
+}
+
 export async function uploadPdf(file) {
   const form = new FormData();
   form.append("file", file);

@@ -13,7 +13,7 @@ const STAGES = [
   { n: 3, name: "Measure square footage", active: false },
 ];
 
-export default function App() {
+export default function App({ onLogout }) {
   const [job, setJob] = useState(null);      // latest job status
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -101,6 +101,26 @@ export default function App() {
     setPricing(await editRate(job.job_id, s2page, code, n));
   }
 
+  // Download the costed estimate as a CSV file (Stage 3).
+  function downloadPricingCsv() {
+    if (!pricing) return;
+    const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const rows = [["Material", "Description", "Quantity", "Unit", "Rate ($)", "Cost ($)"]];
+    pricing.rows.forEach((r) =>
+      rows.push([r.code, r.name || "", r.qty, r.unit, r.rate, r.cost]));
+    rows.push(["", "", "", "", "Total", pricing.total]);
+    const csv = rows.map((r) => r.map(esc).join(",")).join("\r\n");
+    const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `estimate_${job.job_id}_p${s2page}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   // poll the Gemini auto-config once a job exists, until it's ready
   useEffect(() => {
     if (!job?.job_id || config) return;
@@ -164,7 +184,14 @@ export default function App() {
   return (
     <div className="app">
       <header>
-        <h1>Outdoor Elements — <span className="accent">AI Takeoff</span></h1>
+        <div className="header-row">
+          <h1>Outdoor Elements — <span className="accent">AI Takeoff</span></h1>
+          {onLogout && (
+            <button className="logout-btn" onClick={onLogout} title="Log out">
+              <span className="material-symbols-outlined">logout</span> Log out
+            </button>
+          )}
+        </div>
         <p className="sub">
           The AI does what an estimator does, faster. Upload a drawing set and it
           keeps only the takeoff plan sheets.
@@ -605,6 +632,9 @@ export default function App() {
               <div className="panel-head">
                 <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">request_quote</span></span>
                 <h3>Costed estimate <span className="muted">· quantity × unit rate</span></h3>
+                <button className="csv-btn" onClick={downloadPricingCsv} title="Download estimate as CSV">
+                  <span className="material-symbols-outlined">download</span> CSV
+                </button>
               </div>
               <table className="price-table">
                 <thead>
@@ -735,8 +765,8 @@ function ConfigPanel({ jobId, config, setConfig }) {
 
 function Stages({ current, done }) {
   return (
-    <ol className="stages">
-      {STAGES.map((s) => {
+    <ol className="stepper" aria-label="Progress">
+      {STAGES.map((s, i) => {
         const state =
           s.n < current || (s.n === current && done)
             ? "done"
@@ -744,13 +774,14 @@ function Stages({ current, done }) {
             ? "current"
             : "todo";
         return (
-          <li key={s.n} className={state}>
-            <span className="dot">
+          <li key={s.n} className={`stp ${state}`} aria-current={state === "current" ? "step" : undefined}>
+            {i > 0 && <span className={`stp-line ${s.n <= current ? "fill" : ""}`} aria-hidden="true" />}
+            <span className="stp-dot">
               {state === "done"
-                ? <span className="material-symbols-outlined" style={{ fontSize: 16 }}>check</span>
+                ? <span className="material-symbols-outlined">check</span>
                 : s.n}
             </span>
-            {s.name}
+            <span className="stp-label">{s.name}</span>
           </li>
         );
       })}

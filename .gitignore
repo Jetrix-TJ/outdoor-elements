@@ -1,0 +1,39 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.*
+
+# --- Node / frontend ---
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/test-results/
+frontend/playwright-report/
+
+# --- Local services / data ---
+.redis/
+
+# --- Runtime-generated artifacts (large) ---
+backend/jobs/
+outputs/
+
+# --- Model weights (download separately) ---
+*.pt
+
+# --- Debug / scratch work ---
+debug/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# --- Misc scratch patterns ---
+_*.png
+_*.py
+*.npz

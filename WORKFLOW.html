@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Outdoor Elements — AI Takeoff · Current Workflow</title>
+<style>
+  :root{
+    --bg:#0e1116; --panel:#161b22; --panel2:#1c2230; --line:#2a3240;
+    --text:#e6edf3; --muted:#9aa4b2; --accent:#3b82f6; --green:#2ea043;
+    --amber:#d29922; --red:#cf222e; --purple:#a371f7;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:15px/1.6 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 24px 100px}
+  h1{font-size:30px;margin:0 0 6px}
+  h2{font-size:22px;margin:48px 0 6px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+  h3{font-size:17px;margin:26px 0 8px}
+  p{margin:10px 0}
+  .sub{color:var(--muted);margin:0 0 8px}
+  a{color:var(--accent)}
+  code{background:#0b0e13;border:1px solid var(--line);border-radius:5px;
+    padding:1px 6px;font:13px/1.5 ui-monospace,SFMono-Regular,Consolas,monospace}
+  pre{background:#0b0e13;border:1px solid var(--line);border-radius:10px;
+    padding:14px 16px;overflow:auto;font:13px/1.55 ui-monospace,Consolas,monospace}
+  .muted{color:var(--muted)}
+  .tag{display:inline-block;font-size:12px;font-weight:600;border-radius:999px;
+    padding:2px 10px;margin-left:6px;vertical-align:middle}
+  .tag.done{background:rgba(46,160,67,.18);color:#56d364;border:1px solid #1f5130}
+  .tag.partial{background:rgba(210,153,34,.16);color:#e3b341;border:1px solid #5a4214}
+  .tag.research{background:rgba(163,113,247,.16);color:#c297ff;border:1px solid #432c70}
+  .tag.future{background:rgba(154,164,178,.14);color:#aeb7c2;border:1px solid #3a4250}
+
+  .lead{background:linear-gradient(180deg,#1a2030,#141925);border:1px solid var(--line);
+    border-radius:14px;padding:20px 22px;margin:18px 0}
+
+  table{width:100%;border-collapse:collapse;margin:14px 0;font-size:14px}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);font-weight:600}
+  tr:nth-child(even) td{background:#12161d}
+
+  /* flow diagram */
+  .flow{display:flex;flex-wrap:wrap;align-items:stretch;gap:0;margin:18px 0}
+  .step{flex:1 1 0;min-width:140px;background:var(--panel);border:1px solid var(--line);
+    border-radius:10px;padding:12px 12px;margin:6px}
+  .step .n{font-size:12px;color:var(--accent);font-weight:700}
+  .step .t{font-weight:600;margin:2px 0}
+  .step .d{font-size:12.5px;color:var(--muted)}
+  .arrow{align-self:center;color:var(--muted);font-size:20px;padding:0 2px}
+
+  .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin:14px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:14px 15px}
+  .card h4{margin:0 0 4px;font-size:15px}
+  .card .meta{font-size:12px;color:var(--muted)}
+
+  .pill{font-size:12px;border:1px solid var(--line);border-radius:6px;padding:1px 7px;color:var(--muted)}
+  .ok{color:#56d364;font-weight:600}.bad{color:#ff7b72;font-weight:600}
+  .kv{display:flex;gap:10px;flex-wrap:wrap;margin:10px 0}
+  .kv .box{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+    padding:10px 14px;min-width:130px}
+  .kv .box .l{font-size:12px;color:var(--muted)}
+  .kv .box .v{font-size:18px;font-weight:700}
+  .note{border-left:3px solid var(--amber);background:rgba(210,153,34,.07);
+    padding:10px 14px;border-radius:0 8px 8px 0;margin:12px 0}
+  .note.research{border-color:var(--purple);background:rgba(163,113,247,.07)}
+  footer{margin-top:50px;color:var(--muted);font-size:13px;border-top:1px solid var(--line);padding-top:14px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Outdoor Elements — AI Construction Takeoff</h1>
+  <p class="sub">Current workflow &amp; architecture · POC · updated 2026-06-17</p>
+
+  <div class="lead">
+    <strong>Goal.</strong> A human estimator reads a construction drawing set and produces a
+    <em>takeoff</em> — the measured quantity of every material — then checks it against the
+    real human takeoff (the QTO, "quantity take-off"). The POC automates that so the AI does
+    the same job in a fraction of the time. The project is built in <strong>stages</strong>,
+    each a self-contained step.
+  </div>
+
+  <div class="kv">
+    <div class="box"><div class="l">Sample project</div><div class="v">2811 Kirby</div></div>
+    <div class="box"><div class="l">Drawing input</div><div class="v">Vector PDF</div></div>
+    <div class="box"><div class="l">Stage 1 accuracy</div><div class="v ok">6 / 6</div></div>
+    <div class="box"><div class="l">Measure (L1.01)</div><div class="v ok">0.0% MAPE</div></div>
+  </div>
+
+  <h2>The big picture</h2>
+  <p>There are two working pieces today, mirroring the two things a human does:
+    first <strong>pick the pages</strong> that carry quantities, then <strong>measure</strong>
+    each material on those pages.</p>
+
+  <div class="flow">
+    <div class="step"><div class="n">INPUT</div><div class="t">Client PDF</div>
+      <div class="d">35–47 page vector drawing set (landscape + pool)</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">STAGE 1</div><div class="t">Page selection</div>
+      <div class="d">Keep only the takeoff plan sheets (deterministic, no AI)</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">MEASURE</div><div class="t">Surface-area takeoff</div>
+      <div class="d">Measure each material from the vector layer; validate with Gemini</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">OUTPUT</div><div class="t">Compare vs QTO</div>
+      <div class="d">Annotated sheet + measured-vs-ground-truth table + error %</div></div>
+  </div>
+
+  <!-- ============================ STAGE 1 ============================ -->
+  <h2>Stage 1 — Upload &amp; Page Selection <span class="tag done">DONE · verified</span></h2>
+  <p>A web app. Upload the full drawing PDF; a worker keeps only the pages that hold
+     measurable quantities and drops covers, notes, grading, lighting, details, sections and
+     elevations — the same triage a human does first. <strong>Fully deterministic — no AI</strong>
+     (the input is a true vector CAD export).</p>
+
+  <h3>Architecture</h3>
+  <pre>React/Vite (5173) ──/api proxy──▶ FastAPI (8000) ──▶ Celery task: stage1_select
+   upload PDF                       POST /api/upload        (Redis broker, OR inline
+   poll status                      GET  /api/jobs/{id}      "eager" mode if no Redis)
+   grid of kept pages               thumbnails              writes status.json + thumbs</pre>
+
+  <h3>The selection rule (two filters)</h3>
+  <table>
+    <tr><th>Filter</th><th>What it checks</th><th>Reads from the vector layer</th></tr>
+    <tr><td><strong>1 · Sheet title</strong></td>
+        <td>Keep <code>MATERIAL / HARDSCAPE / PLANTING / LANDSCAPE / REFERENCE PLAN</code>.
+            Drop <code>NOTES, GRADING, LIGHTING, IRRIGATION, DETAIL, SECTION, ELEVATION, OVERALL</code>.</td>
+        <td>Title text read from the <em>title-block corner only</em> (not the whole page — avoids
+            "SEE DETAIL" callouts).</td></tr>
+    <tr><td><strong>2 · Legend richness</strong></td>
+        <td>Keep only pages with a real material legend.</td>
+        <td>≥ 3 distinct non-black/white vector fill colors (swatch complexity).</td></tr>
+  </table>
+  <p class="muted">KEEP = Filter 1 passes <strong>AND</strong> Filter 2 passes.</p>
+
+  <h3>Validated against ground truth</h3>
+  <p>On <code>2811 Kirby - LANDSCAPE.pdf</code> (35 pages) the rule reproduces the human's exact
+     kept set — <span class="ok">6 / 6, zero false positives</span>:
+     <code>L1.01, L1.02, L1.04, L5.01, L5.02, L5.03</code>. The other 29 pages are dropped with a
+     stated reason. <strong>3 Playwright tests pass</strong> (upload selects 6 pages · click-to-preview
+     opens · non-PDF rejected).</p>
+
+  <div class="cards">
+    <div class="card"><h4>backend/selection.py</h4><div class="meta">The two-filter selector (engine)</div></div>
+    <div class="card"><h4>backend/tasks.py</h4><div class="meta">stage1_select — classify + render thumbnails</div></div>
+    <div class="card"><h4>backend/celery_app.py</h4><div class="meta">Redis broker; eager fallback (no Redis)</div></div>
+    <div class="card"><h4>backend/main.py</h4><div class="meta">FastAPI: upload / status / thumbnails / preview</div></div>
+    <div class="card"><h4>backend/store.py</h4><div class="meta">Filesystem job store (atomic writes)</div></div>
+    <div class="card"><h4>frontend/src/App.jsx</h4><div class="meta">Upload, poll, kept-page grid, click-to-enlarge</div></div>
+  </div>
+
+  <h3>Endpoints</h3>
+  <table>
+    <tr><th>Method · path</th><th>Purpose</th></tr>
+    <tr><td><code>POST /api/upload</code></td><td>Upload PDF → returns <code>{job_id}</code>; dispatches the worker (non-blocking).</td></tr>
+    <tr><td><code>GET /api/jobs/{id}</code></td><td>Job status + per-page classification (keep/drop + reason).</td></tr>
+    <tr><td><code>GET /api/jobs/{id}/thumbs/{n}</code></td><td>Kept-page thumbnail.</td></tr>
+    <tr><td><code>GET /api/jobs/{id}/page/{i}/preview</code></td><td>High-res page render for click-to-enlarge.</td></tr>
+  </table>
+
+  <!-- ============================ MEASURE ============================ -->
+  <h2>Surface-Area Takeoff (measurement pipeline) <span class="tag done">DONE · 0.0% on L1.01</span></h2>
+  <p>Measures each material on a sheet from the <strong>exact PDF vector fill polygons</strong>,
+     matched to the legend by color, and compares to the legend's printed QTO value. Runs as a
+     staged pipeline (<code>oe_takeoff/s2..s8</code>), driven by <code>run_takeoff.py</code>;
+     results are reviewed in the Streamlit app (<code>app.py</code>).</p>
+
+  <div class="flow">
+    <div class="step"><div class="n">s2</div><div class="t">Extract</div><div class="d">render page + <code>get_drawings()</code> vector geometry</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">s4</div><div class="t">Calibrate</div><div class="d">read scale → points→feet</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">s3</div><div class="t">Legend</div><div class="d">codes·names·units + swatch color (Gemini cross-check)</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">s5</div><div class="t">Detect</div><div class="d">sum vector fill area per color</div></div>
+  </div>
+  <div class="flow">
+    <div class="step"><div class="n">s6</div><div class="t">Validate</div><div class="d">Gemini labels ambiguous / shared-color groups</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">s7</div><div class="t">Annotate</div><div class="d">overlay regions · code · name · value</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">s8</div><div class="t">Compare</div><div class="d">measured vs ground truth → MAPE</div></div>
+    <div class="arrow">→</div>
+    <div class="step"><div class="n">UI</div><div class="t">Review</div><div class="d">Streamlit table + error chart</div></div>
+  </div>
+
+  <h3>Scale math</h3>
+  <p>PDF coordinates are in <strong>points</strong> (1 pt = 1/72 inch). With a sheet scale of
+     <em>1 inch = S feet</em>:</p>
+  <pre>feet  = points     × (S / 72)
+sqft  = sq_points  × (S / 72)²        e.g. L1.01: S = 10  →  sqft = pt² × (10/72)²</pre>
+  <p class="muted">The "trust geometry, LLM only labels" principle: exact vector areas come from the
+     PDF; Gemini is used only to attribute colors that collide or are shared between two materials.</p>
+
+  <h3>Result — sheet L1.01 vs the human QTO</h3>
+  <table>
+    <tr><th>Code</th><th>Material</th><th>Ground truth (sq ft)</th><th>Measured</th><th>Error</th></tr>
+    <tr><td>M.5</td><td>Concrete Paver A</td><td>6,550.15</td><td>6,550.11</td><td class="ok">−0.0%</td></tr>
+    <tr><td>M.6</td><td>Concrete Paver B</td><td>1,760.05</td><td>1,760.03</td><td class="ok">−0.0%</td></tr>
+    <tr><td>M.7</td><td>Tile Paver A</td><td>191.42</td><td>191.41</td><td class="ok">−0.0%</td></tr>
+    <tr><td>M.15</td><td>River Rock</td><td>368.57</td><td>368.55</td><td class="ok">−0.0%</td></tr>
+    <tr><td>M.16</td><td>Beach Pebble</td><td>413.50</td><td>413.51</td><td class="ok">+0.0%</td></tr>
+    <tr><td colspan="4"><strong>Mean absolute % error (MAPE)</strong></td><td class="ok"><strong>0.0%</strong></td></tr>
+  </table>
+
+  <!-- ============================ FINDINGS ============================ -->
+  <h2>Key finding — raw vs colored drawings</h2>
+  <div class="note research">
+    <strong>The measurement works on the COLORED sheet, not the raw drawing.</strong>
+    The material areas are colored only in the human's <strong>QTO</strong>
+    (≈ 21.9% of the page is filled). On the <strong>raw input</strong> drawing the same areas are
+    <em>not</em> filled — only ~0.2% gray hatching — because the human <em>creates</em> each
+    colored space by interpreting the plan. So the pipeline reaches 0% by measuring the colored
+    QTO; measuring directly from the raw uncolored input is a separate, unsolved problem.
+  </div>
+  <p>Every quick approach to detect spaces from the raw input was tested and failed to reach
+     QTO accuracy:</p>
+  <table>
+    <tr><th>Approach</th><th>Outcome</th></tr>
+    <tr><td>Pure vector closed polygons</td><td class="bad">Noisy — a material is hundreds of tiny tile/hatch elements, no single polygon = a space</td></tr>
+    <tr><td>Gemini outlines whole page</td><td class="bad">Boxes the legend column, not the plan areas</td></tr>
+    <tr><td>Colored line extraction</td><td class="bad">Colors every closed shape — unreadable</td></tr>
+    <tr><td>Gemini estimates areas from dimensions</td><td class="bad">77–181% error + misreads the legend</td></tr>
+  </table>
+  <p class="muted">Realistic path forward: human-in-the-loop click-to-measure (what commercial
+     takeoff tools — Bluebeam, PlanSwift, Trimble — actually do). Full auto-detection is open R&amp;D.</p>
+
+  <!-- ============================ STATUS ============================ -->
+  <h2>Status at a glance</h2>
+  <table>
+    <tr><th>Capability</th><th>State</th><th>Notes</th></tr>
+    <tr><td>Stage 1 — page selection</td><td><span class="tag done">DONE</span></td><td>6/6 on landscape · 3 Playwright tests green</td></tr>
+    <tr><td>Stage 1 — click-to-preview</td><td><span class="tag done">DONE</span></td><td>High-res page enlarge</td></tr>
+    <tr><td>Area measurement (colored sheet)</td><td><span class="tag done">DONE</span></td><td>L1.01 = 0.0% MAPE; runs on every sq-ft sheet</td></tr>
+    <tr><td>Pool (AQ) sheets</td><td><span class="tag partial">PARTIAL</span></td><td>Monochrome, no color legend → needs a "pool mode"</td></tr>
+    <tr><td>Space detection from RAW input</td><td><span class="tag research">RESEARCH</span></td><td>Unsolved; human-in-the-loop is the realistic path</td></tr>
+    <tr><td>Linear-ft items</td><td><span class="tag future">FUTURE</span></td><td>Method known (stroke color + path length); Kirby legend has no LF rows</td></tr>
+    <tr><td>Count items (SF.x, PL.x)</td><td><span class="tag future">FUTURE</span></td><td>Out of scope for now</td></tr>
+  </table>
+
+  <!-- ============================ FILES + RUN ============================ -->
+  <h2>Project structure</h2>
+  <pre>outdoor-elements/
+├── backend/                 # Stage 1 web service (FastAPI + Celery)
+│   ├── selection.py         #   two-filter page selector (engine)
+│   ├── tasks.py             #   stage1_select worker
+│   ├── celery_app.py        #   Redis broker + eager fallback
+│   ├── main.py  store.py  schemas.py
+│   └── stage2.py            #   experimental space-detection spike (not wired)
+├── frontend/                # Stage 1 UI (React + Vite)
+│   ├── src/App.jsx  api.js  main.jsx
+│   └── tests/upload.spec.js #   Playwright tests (3 passing)
+├── oe_takeoff/              # Measurement pipeline
+│   ├── s2_extract.py  s4_calibrate.py  s3_legend.py
+│   ├── s5_segment.py  s6_validate.py   s7_annotate.py  s8_compare.py
+│   ├── config.py  models.py
+├── run_takeoff.py           # CLI driver for the measurement pipeline
+├── app.py                   # Streamlit review UI (reads outputs/)
+├── outputs/                 # annotated sheets, JSON/CSV, RESULTS.md
+└── docs/                    # specs + verification screenshots</pre>
+
+  <h2>How to run</h2>
+  <h3>Stage 1 web app</h3>
+  <pre># backend (from outdoor-elements/)
+.venv/Scripts/python.exe -m uvicorn backend.main:app --port 8000
+# frontend (from outdoor-elements/frontend/)
+npm run dev        # http://localhost:5173
+# tests
+npx playwright test</pre>
+  <p class="muted">Runs without Redis (eager mode). For real workers: start Redis, then
+     <code>celery -A backend.celery_app worker --pool=solo</code>.</p>
+
+  <h3>Measurement pipeline</h3>
+  <pre># set the PDF, then run a sheet (0-based page index)
+OE_PDF_PATH="…/2811 KIRBY QTO.pdf" python run_takeoff.py --page 0   # L1.01
+python run_takeoff.py --all                                          # every sq-ft sheet
+streamlit run app.py                                                 # review the results</pre>
+  <p class="muted">GEMINI_API_KEY is read from <code>.env</code> — never hardcoded.</p>
+
+  <footer>
+    Outdoor Elements AI Takeoff POC · This document describes the current state after the
+    2026-06-17 revert of the standalone Streamlit takeoff app. The measurement pipeline
+    (<code>oe_takeoff</code> + <code>run_takeoff.py</code> + <code>app.py</code>) and Stage 1
+    (<code>backend/</code> + <code>frontend/</code>) are the live components.
+  </footer>
+
+</div>
+</body>
+</html>

@@ -1,0 +1,20 @@
+services:
+  db:
+    image: postgres:16
+    container_name: oe-postgres
+    environment:
+      POSTGRES_USER: oe
+      POSTGRES_PASSWORD: oe
+      POSTGRES_DB: outdoor_elements
+    ports:
+      - "5433:5432"   # 5432 is taken by a host Postgres; map ours to 5433
+    volumes:
+      - oe-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U oe -d outdoor_elements"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  oe-pgdata:

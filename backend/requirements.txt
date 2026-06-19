@@ -1,0 +1,10 @@
+# Stage 1 backend (in addition to the root requirements.txt engine deps)
+fastapi>=0.110
+uvicorn>=0.29
+python-multipart>=0.0.9
+celery>=5.3
+redis>=5.0
+PyMuPDF>=1.24
+pydantic>=2.6
+sqlalchemy>=2.0
+psycopg2-binary>=2.9

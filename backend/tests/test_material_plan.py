@@ -39,6 +39,21 @@ def test_parse_json_reply_strips_fences_and_validates():
     assert by["X"]["unit"] == "area" and by["X"]["detect"] == "closed_area"
 
 
+def test_drops_non_takeoff_callouts():
+    # layout/control points & survey marks must NOT become takeoff items
+    assert not mp.is_takeoff_material("Construction Point")
+    assert not mp.is_takeoff_material("LP Control Point")
+    assert not mp.is_takeoff_material("Datum")
+    assert mp.is_takeoff_material("Concrete Paver")
+    reply = """[
+      {"code":"LP1","name":"Construction Point","unit":"count","detect":"symbol"},
+      {"code":"M.5","name":"Concrete Paver","unit":"area","detect":"closed_area"}
+    ]"""
+    items = mp._parse_json_list(reply)
+    codes = {i["code"] for i in items}
+    assert codes == {"M.5"}            # LP1 construction point dropped
+
+
 def test_summarize_counts_by_unit():
     items = [{"unit": "area"}, {"unit": "area"}, {"unit": "linear"}, {"unit": "count"}]
     assert mp.summarize(items) == {"area": 2, "linear": 1, "count": 1}

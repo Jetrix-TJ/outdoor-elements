@@ -62,6 +62,19 @@ def _api_key(explicit: str | None) -> str:
     return key
 
 
+# callout families that are NOT takeoff materials — layout/control points,
+# survey marks, sheet annotations. They carry code-like tags and would otherwise
+# pollute the takeoff (e.g. the pool set's LP## "construction point" callouts).
+_NON_TAKEOFF = re.compile(
+    r"\b(construction|control|layout)\s+point|\bdatum\b|bench\s?mark|"
+    r"north\s+arrow|grid\s?line|match\s?line|spot\s+elevation|key\s?note|"
+    r"property\s+line|setback|limit\s+of\s+work|station\b|control\s+line", re.I)
+
+
+def is_takeoff_material(name: str) -> bool:
+    return not _NON_TAKEOFF.search(name or "")
+
+
 def _parse_json_list(text: str) -> list[dict]:
     """Pull the JSON array out of the model reply (it may wrap it in ``` fences)."""
     t = text.strip()
@@ -77,6 +90,8 @@ def _parse_json_list(text: str) -> list[dict]:
     for d in data if isinstance(data, list) else []:
         if not isinstance(d, dict) or not d.get("code"):
             continue
+        if not is_takeoff_material(str(d.get("name", ""))):
+            continue   # drop layout/control points & sheet annotations
         unit = str(d.get("unit", "")).lower()
         detect = str(d.get("detect", "")).lower()
         if unit not in VALID_UNITS:

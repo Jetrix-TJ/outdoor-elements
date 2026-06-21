@@ -169,6 +169,20 @@ def _has_material_tags(pdf, page: int, cfg: dict) -> bool:
     return len(tags) >= 2
 
 
+def _compute_takeoff(pdf, page: int, groups: list, scale: float) -> list:
+    """Area + linear + count takeoff for the page. Reuses the engine's area totals
+    and vision-reads the legend for the linear/count split (walls, trees, etc.).
+    Best-effort: never let the takeoff extras break Stage 2."""
+    try:
+        from . import takeoff
+        area_by_code = {g["label"]: g.get("sqft", 0.0)
+                        for g in (groups or []) if g.get("label")}
+        return takeoff.build_takeoff(str(pdf), page, use_vision=True,
+                                     scale_in_per_ft=scale, areas=area_by_code)
+    except Exception:  # noqa: BLE001
+        return []
+
+
 @shared_task(name="stage2_detect")
 def stage2_detect(job_id: str, page: int, force: bool = False) -> dict:
     """Detect & color the surface regions on one page (Stage 2). Celery entry."""
@@ -250,6 +264,7 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
                 comparison=legend_comparison(_open_page(pdf, page), groups),
                 validation=_build_validation(sid, res["areas"]),
             )
+            status["takeoff"] = _compute_takeoff(pdf, page, groups, res["scale_in_per_ft"])
         else:
             # Fallback: existing color-grouping / label-seeding
             res = stage2.detect_color_regions(pdf, page, out)
@@ -258,6 +273,12 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
                 "vector": res["vector"], "message": res["message"], "groups": res["groups"],
                 "comparison": res.get("comparison"),
             })
+        # Any completed path that didn't set it (pool, color): add the
+        # area+linear+count takeoff so walls/trees/counts show too.
+        if status.get("status") == "done" and "takeoff" not in status:
+            status["takeoff"] = _compute_takeoff(
+                pdf, page, status.get("groups", []),
+                status.get("scale_in_per_ft", 1.0 / 16))
     except Exception as exc:  # noqa: BLE001
         status.update(status="error", error=f"{type(exc).__name__}: {exc}")
     store.write_stage2(job_id, page, status)

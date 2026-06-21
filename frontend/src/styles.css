@@ -313,6 +313,15 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
 .zonelist.nested .zonerow .swatch { width: 13px; height: 13px; border-radius: 3px; }
 .zonelist.nested .zonerow .zid { font-size: 11px; color: var(--muted); min-width: 56px; }
 
+/* Walls & Counts (linear / count takeoff rows) */
+.unit-chip {
+  flex: 0 0 auto; font-size: 10px; font-weight: 700; letter-spacing: .3px;
+  padding: 2px 6px; border-radius: 5px; color: #fff;
+}
+.unit-chip.linear { background: var(--primary); }
+.unit-chip.count { background: var(--green); }
+.tk-name { font-size: 12px; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 .deleted-zones { margin-top: 10px; }
 .deleted-zones summary { font-size: 12px; color: var(--muted); cursor: pointer; padding: 4px 0; }
 .zonerow .material-symbols-outlined { font-size: 18px; }

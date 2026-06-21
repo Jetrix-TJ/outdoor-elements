@@ -115,9 +115,13 @@ def _material_plan(pdf: str, page: int, use_vision: bool) -> list[dict]:
 
 
 def build_takeoff(pdf: str, page: int, use_vision: bool = True,
-                  scale_in_per_ft: float | None = None) -> list[dict]:
+                  scale_in_per_ft: float | None = None,
+                  areas: dict | None = None) -> list[dict]:
     """Full raw->QTO for one page: read the plan, detect each material by its
-    method, return a unified takeoff (area + linear + count)."""
+    method, return a unified takeoff (area + linear + count).
+
+    `areas` {code->sqft} may be passed in (e.g. the Stage-2 zone engine already
+    ran) to avoid re-running the area engine."""
     plan = _material_plan(pdf, page, use_vision)
     if not plan:
         return []
@@ -135,9 +139,10 @@ def build_takeoff(pdf: str, page: int, use_vision: bool = True,
     # AREA (closed_area + open_hatch) -> zone engine, restricted to area codes
     area_codes = [m["code"] for m in plan if m["unit"] == "area"]
     if area_codes:
-        areas = calibrate.detect_area(pdf, page)   # legend-driven engine
+        if areas is None:
+            areas = calibrate.detect_area(pdf, page)   # legend-driven engine
         for c in area_codes:
-            quantity[c] = round(areas.get(c, 0.0), 1)
+            quantity[c] = round(float(areas.get(c, 0.0)), 1)
     # COUNT (symbol) -> tag occurrences
     counts = count_by_code(pdf, page)
     for m in by_method["symbol"]:

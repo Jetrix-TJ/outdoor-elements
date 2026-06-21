@@ -522,6 +522,28 @@ export default function App({ onLogout }) {
                     </div>
                   );
                 })() : null}
+
+                {Array.isArray(s2.takeoff) && s2.takeoff.some((t) => t.unit !== "area" && t.quantity) && (
+                  <div className="zones-block">
+                    <div className="panel-head">
+                      <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">straighten</span></span>
+                      <h3>Walls &amp; Counts <span className="muted">(linear &amp; count)</span></h3>
+                    </div>
+                    <p className="hint">Measured by the per-material brain — walls/borders in linear feet, trees/benches/columns as counts.</p>
+                    <ul className="surflist">
+                      {s2.takeoff.filter((t) => t.unit !== "area" && t.quantity).map((t) => (
+                        <li key={t.code} className="zonerow">
+                          <span className={`unit-chip ${t.unit}`}>{t.unit === "linear" ? "LF" : "EA"}</span>
+                          <code>{t.code}</code>
+                          <span className="tk-name muted">{t.name}</span>
+                          <span className="sqft">
+                            {t.quantity.toLocaleString()} {t.unit_label}
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
               </div>
             </div>
           )}

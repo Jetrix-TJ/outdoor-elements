@@ -10,8 +10,8 @@ from PIL import Image
 
 from celery import shared_task
 
-from . import (estimate_parse, gemini_config, pool_mode, qto_engine, selection,
-               stage2, store, zones)
+from . import (estimate_parse, gemini_config, legend, pool_mode, qto_engine,
+               selection, stage2, store, zones)
 from .stage2 import legend_comparison
 
 
@@ -135,19 +135,26 @@ def run_stage1(job_id: str, filename: str) -> dict:
     return status
 
 
-def _auto_sheet_cfg(page) -> dict:
+def _auto_sheet_cfg(pdf, page: int, page_obj) -> dict:
     """Default per-sheet config for a B&W material plan that has no reviewed
     config — so the lead's line-width zone engine still runs (crisp zones)
     instead of the rounded label-seeding fallback. Scale is read from the sheet's
-    printed scale note."""
-    fpi = stage2.sheet_feet_per_inch(page, default=16.0)
+    printed scale note; the material tag family is auto-detected (Kirby `M.x`,
+    Pelican `A#`, …) so the engine generalizes beyond the hardcoded `M` family."""
+    fpi = stage2.sheet_feet_per_inch(page_obj, default=16.0)
+    clip = {"top": 0.05, "bottom": 0.92, "left": 0.0, "right": 0.80}
+    tcfg = legend.tag_config(pdf, page, clip)
+    if tcfg:
+        tag_pattern, title = tcfg["tag_pattern"], f"Material Plan ({tcfg['family']})"
+    else:
+        tag_pattern, title = r"^\(?(M[-.]?\d{1,2})\)?$", "Material Plan"
     return {
         "sheet_id": "AUTO",
-        "title": "Material Plan",
+        "title": title,
         "scale_in_per_ft": 1.0 / fpi,
-        "tag_pattern": r"^\(?M[-.]?(\d{1,2})\)?$",
-        "tag_numeric_only": True,
-        "clip": {"top": 0.05, "bottom": 0.92, "left": 0.0, "right": 0.80},
+        "tag_pattern": tag_pattern,
+        "tag_numeric_only": False,
+        "clip": clip,
         "phase1_min_zone_sf": 0,
         "phase2_radius_ft": 24,
     }
@@ -190,7 +197,7 @@ def run_stage2(job_id: str, page: int) -> dict:
         # rather than the rounded label-seeding fallback.
         auto_cfg = None
         if not chromatic and not sheet_cfg:
-            _ac = _auto_sheet_cfg(page_obj)
+            _ac = _auto_sheet_cfg(pdf, page, page_obj)
             if _has_material_tags(pdf, page, _ac):
                 auto_cfg = _ac
 

@@ -623,56 +623,59 @@ export default function App({ onLogout }) {
           {!estimate || !estimate.sections || estimate.sections.length === 0 ? (
             <div className="status">No priced takeoff yet — detect material pages in Stage 2, then return here.</div>
           ) : (() => {
-            const money = (v) => `$${Math.round(v).toLocaleString()}`;
-            const line = (r) => (
-              <li key={r.code} className="oe-line">
-                <span className="oe-line-main">
-                  <code className="oe-code">{r.code}</code>
-                  <span className="oe-desc">{r.name || r.code}</span>
-                  <span className="oe-meta">
-                    {r.qty.toLocaleString()} {r.unit} @ $
-                    <input
-                      className="rate-in" type="number" min="0" step="0.5"
-                      defaultValue={r.rate}
-                      onBlur={(e) => onRate(r.code, e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                    />
-                  </span>
+            const money = (v) => `$${Math.round(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            const sf = (rows) => Math.round(rows.reduce((n, r) => n + (r.qty || 0), 0)).toLocaleString();
+            // a scope item: "Provide and install <Material> (<qty> SF)  @ $<rate>/SF"
+            const item = (r) => (
+              <li key={r.code} className="oe-item">
+                Provide and install <b>{r.name || r.code}</b> ({r.qty.toLocaleString()} SF)
+                <span className="oe-at"> @ $
+                  <input
+                    className="rate-in" type="number" min="0" step="0.5"
+                    defaultValue={r.rate}
+                    onBlur={(e) => onRate(r.code, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                  />/SF
                 </span>
-                <span className="oe-cost">{money(r.cost)}</span>
               </li>
             );
             return (
-              <section className="pricing oe-estimate">
+              <section className="pricing oe-scope-doc">
                 <div className="panel-head">
                   <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">request_quote</span></span>
-                  <h3>Estimate <span className="muted">· Outdoor Elements scope · all {estimate.page_count} detected page(s)</span></h3>
+                  <h3>Scope of Work <span className="muted">· Outdoor Elements · all {estimate.page_count} detected page(s)</span></h3>
                   <button className="csv-btn" onClick={downloadPricingCsv} title="Download as CSV">
                     <span className="material-symbols-outlined">download</span> CSV
                   </button>
                 </div>
-                {estimate.sections.map((sec) => (
-                  <div className="oe-section" key={sec.name}>
-                    <div className="oe-sec-head">
-                      <span className="oe-sec-name">{sec.name}</span>
-                      <span className="oe-sec-total">{money(sec.total)}</span>
-                    </div>
-                    {sec.subsections.map((s) => (
-                      <div className="oe-sub" key={s.name}>
-                        <div className="oe-sub-head"><span>{s.name}</span><span>{money(s.total)}</span></div>
-                        <ul className="oe-lines">{s.lines.map(line)}</ul>
+                {estimate.sections.map((sec) => {
+                  const allRows = [...sec.lines, ...sec.subsections.flatMap((s) => s.lines)];
+                  return (
+                    <div className="oe-disc" key={sec.name}>
+                      <h4 className="oe-disc-head">{sec.name} <span className="oe-sf">({sf(allRows)} SF)</span></h4>
+                      {sec.subsections.map((s) => (
+                        <div className="oe-subsec" key={s.name}>
+                          <div className="oe-subsec-head">
+                            <span>{s.name}</span><span className="oe-lump">{money(s.total)}</span>
+                          </div>
+                          <ol className="oe-scope">{s.lines.map(item)}</ol>
+                        </div>
+                      ))}
+                      {sec.lines.length > 0 && <ol className="oe-scope">{sec.lines.map(item)}</ol>}
+                      <div className="oe-disc-total">
+                        <span>{sec.name.split(" / ")[0].replace(/\b\w/g, (c) => c)} Total:</span>
+                        <span>{money(sec.total)}</span>
                       </div>
-                    ))}
-                    {sec.lines.length > 0 && <ul className="oe-lines">{sec.lines.map(line)}</ul>}
-                  </div>
-                ))}
+                    </div>
+                  );
+                })}
                 <div className="oe-grand">
                   <span>GRAND TOTAL</span>
                   <span>{money(estimate.grand_total)}</span>
                 </div>
                 <p className="hint">
-                  Combined across all detected pages, in the Outdoor Elements scope-of-work format.
-                  Edit any rate (Enter) — the line, section and grand total update.
+                  Outdoor Elements scope of work, combined across all detected pages.
+                  Edit any $/SF rate (Enter) — the subsection lump sum, section and grand total update.
                 </p>
               </section>
             );

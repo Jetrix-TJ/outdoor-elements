@@ -143,6 +143,30 @@ header h1 .accent { color: var(--accent); }
 .csv-btn:hover { background: var(--surface-tint); border-color: var(--primary); }
 .csv-btn .material-symbols-outlined { font-size: 18px; }
 
+/* OE narrative SCOPE-OF-WORK document (numbered items, subsection lump sums) */
+.oe-scope-doc { margin-top: 8px; }
+.oe-disc { margin: 0 0 22px; }
+.oe-disc-head {
+  margin: 0 0 6px; font-size: 15px; font-weight: 700; letter-spacing: .5px;
+  color: var(--text); border-bottom: 2px solid var(--text); padding-bottom: 6px;
+}
+.oe-disc-head .oe-sf { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.oe-subsec { margin: 10px 0; }
+.oe-subsec-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-weight: 600; font-size: 13.5px; color: var(--text);
+  border-bottom: 1px dotted var(--border); padding-bottom: 3px;
+}
+.oe-subsec-head .oe-lump { color: var(--primary); font-variant-numeric: tabular-nums; }
+.oe-scope { margin: 6px 0 8px; padding-left: 32px; list-style: decimal; }
+.oe-item { padding: 3px 0; line-height: 1.55; font-size: 13px; color: var(--text); }
+.oe-at { color: var(--muted); white-space: nowrap; }
+.oe-at .rate-in { width: 50px; }
+.oe-disc-total {
+  display: flex; justify-content: space-between; margin-top: 8px; padding: 6px 4px;
+  border-top: 1px solid var(--border); font-weight: 600; font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
 /* OE scope-of-work style estimate (sectioned, not a flat table) */
 .oe-estimate { margin-top: 8px; }
 .oe-section { margin: 0 0 14px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }

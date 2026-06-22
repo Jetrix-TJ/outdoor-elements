@@ -586,107 +586,11 @@ export default function App({ onLogout }) {
       {job?.status === "done" && view === "stage3" && (
         <section className="results">
           <div className="s2bar">
-            <span className="muted">Stage 3 · measure square footage · our output vs human QTO</span>
+            <span className="muted">Stage 3 · estimate · Outdoor Elements scope of work</span>
           </div>
 
-          {!s2 || s2.status !== "done" ? (
+          {(!s2 || s2.status !== "done") && (
             <div className="status">Run Stage 2 first.</div>
-          ) : (
-            <>
-              {s2.comparison ? (
-                <>
-                  <div className={`verdict ${s2.comparison.mape != null && s2.comparison.mape < 5 ? "match" : "near"}`}>
-                    {s2.comparison.mape != null
-                      ? `Our takeoff vs human QTO — overall error (MAPE) ${s2.comparison.mape}% across ${s2.comparison.matched} matched materials`
-                      : "Measured — no overlapping ground-truth values to score"}
-                  </div>
-                  <div className="s2grid">
-                    <div className="s2img">
-                      <img src={`${stage2OverlayUrl(job.job_id, s2page)}?v=${s2page}-${overlayKey}`} alt="measured surfaces" />
-                    </div>
-                    <div className="s2side">
-                      <table className="cmp3">
-                        <thead>
-                          <tr><th>Material</th><th>Human</th><th>Ours</th><th>Δ</th></tr>
-                        </thead>
-                        <tbody>
-                          {s2.comparison.rows.map((r) => {
-                            const e = r.error_pct;
-                            const cls = e == null ? "" : Math.abs(e) < 5 ? "ok" : Math.abs(e) < 15 ? "warn" : "bad";
-                            return (
-                              <tr key={r.code}>
-                                <td><code>{r.code}</code> {r.name}</td>
-                                <td>{r.ground_truth.toLocaleString()}</td>
-                                <td>{r.measured != null ? Math.round(r.measured).toLocaleString() : "—"}</td>
-                                <td className={cls}>{e == null ? "—" : `${e > 0 ? "+" : ""}${e}%`}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                      <p className="hint">
-                        Human = sq-ft values printed in the sheet legend (the human takeoff).
-                        Ours = measured from the vector geometry × scale.
-                      </p>
-                    </div>
-                  </div>
-                </>
-              ) : s2.validation && s2.validation.length ? (
-                <>
-                  <div className={`verdict ${s2.validation.every((v) => v.delta_pct == null || Math.abs(v.delta_pct) < 10) ? "match" : "near"}`}>
-                    Engine takeoff vs QTO reference — {s2.validation.filter((v) => v.delta_pct != null && Math.abs(v.delta_pct) < 10).length}/{s2.validation.length} within 10%
-                  </div>
-                  <div className="s2grid">
-                    <div className="s2img">
-                      <img src={`${stage2OverlayUrl(job.job_id, s2page)}?v=${s2page}-${overlayKey}`} alt="measured surfaces" />
-                    </div>
-                    <div className="s2side">
-                      <table className="cmp3">
-                        <thead><tr><th>Material</th><th>QTO ref</th><th>Ours</th><th>Δ</th></tr></thead>
-                        <tbody>
-                          {s2.validation.map((v) => {
-                            const e = v.delta_pct;
-                            const cls = e == null ? "" : Math.abs(e) < 5 ? "ok" : Math.abs(e) < 15 ? "warn" : "bad";
-                            return (
-                              <tr key={v.code}>
-                                <td><code>{v.code}</code></td>
-                                <td>{v.reference.toLocaleString()}</td>
-                                <td>{v.computed != null ? Math.round(v.computed).toLocaleString() : "—"}</td>
-                                <td className={cls}>{e == null ? "—" : `${e > 0 ? "+" : ""}${e}%`}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                      <p className="hint">
-                        QTO ref = the human takeoff values. Ours = line-width zone engine
-                        (M.5/M.7 within ~2%; some materials over-claim — a known engine limit).
-                      </p>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="note-box">
-                  <p><b>No human ground-truth on this sheet to compare against.</b></p>
-                  <p className="muted">
-                    The raw drawing's legend prints material names but no sq-ft values — the human
-                    takeoff numbers live only in the <b>QTO</b>. Upload <code>2811 KIRBY QTO.pdf</code>
-                    and run Stage 2 → Stage 3 to see our output line up against the human QTO.
-                  </p>
-                  <table className="cmp3">
-                    <thead><tr><th>Material</th><th>Our measure (sq ft)</th></tr></thead>
-                    <tbody>
-                      {(s2.groups || []).map((g) => (
-                        <tr key={g.label || g.hex}>
-                          <td><code>{g.label || g.hex}</code></td>
-                          <td>{g.sqft ? g.sqft.toLocaleString() : "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-            </>
           )}
 
           {s2?.status === "done" && pricing && (() => {

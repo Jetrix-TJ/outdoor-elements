@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   uploadPdf, pollJob, thumbUrl, previewUrl,
   startStage2, pollStage2, stage2OverlayUrl,
-  startAllStage2, getStage2Status,
+  startAllStage2, getStage2Status, getStage2,
   getConfig, editScale, getPricing, editRate, getEstimate,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
@@ -261,8 +261,31 @@ export default function App({ onLogout }) {
     }
   }
 
-  // minimal placeholder; replaced in Task 3
-  async function selectPage(idx) { setS2page(idx); }
+  // View a kept page: if its detection is done, load the cached result instantly;
+  // otherwise just reflect its live status (the batch is extracting it). Does NOT
+  // trigger a new detection — that's the batch's job, so switching tabs is instant.
+  async function selectPage(idx) {
+    setS2page(idx);
+    setOverlayKey((k) => k + 1);
+    const st = s2statuses[String(idx)];
+    if (st === "done") {
+      try {
+        const s = await getStage2(job.job_id, idx);
+        setS2(s);
+        loadZones(idx);
+      } catch (e) { setS2({ status: "error", error: e.message }); }
+    } else {
+      setS2({ status: st === "error" ? "error" : "running" });
+    }
+  }
+
+  useEffect(() => {
+    if (view !== "stage2" || s2page == null) return;
+    if (s2statuses[String(s2page)] === "done" && s2?.status !== "done") {
+      getStage2(job.job_id, s2page).then((s) => { setS2(s); loadZones(s2page); }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s2statuses, s2page, view]);
 
   function goStage2() {
     setView("stage2");
@@ -420,15 +443,27 @@ export default function App({ onLogout }) {
           </div>
 
           <div className="s2pages">
-            {kept.map((p) => (
-              <button
-                key={p.index}
-                className={`pagepick ${s2page === p.index ? "active" : ""}`}
-                onClick={() => runStage2(p.index)}
-              >
-                {p.sheet}
-              </button>
-            ))}
+            {(() => {
+              const vals = Object.values(s2statuses);
+              const done = vals.filter((s) => s === "done").length;
+              return vals.length ? (
+                <span className="batch-progress">Extracted {done}/{vals.length} sheets</span>
+              ) : null;
+            })()}
+            {kept.map((p) => {
+              const st = s2statuses[String(p.index)] || "pending";
+              return (
+                <button
+                  key={p.index}
+                  className={`pagepick ${s2page === p.index ? "active" : ""} st-${st}`}
+                  onClick={() => selectPage(p.index)}
+                  title={st === "done" ? "Extracted — click to view" : `Extracting… (${st})`}
+                >
+                  <span className={`dot ${st}`} />
+                  {p.sheet}
+                </button>
+              );
+            })}
             <span className="anypage">
               or detect page #
               <input

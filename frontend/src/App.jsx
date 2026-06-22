@@ -143,21 +143,27 @@ export default function App({ onLogout }) {
     catch (e) { setError(e.message); }
   }
 
-  // load the combined OE estimate (all detected pages) when entering Stage 3
+  // While on Stage 3, keep the estimate + extraction status fresh so the page
+  // FILLS IN as sheets finish — instead of dead-ending on "no takeoff yet".
+  // Polls every 2.5s until every kept sheet is terminal (done/error).
   useEffect(() => {
     if (view !== "stage3" || !job?.job_id) return;
-    getEstimate(job.job_id).then(setEstimate).catch(() => {});
+    let alive = true;
+    const tick = async () => {
+      try {
+        const { pages } = await getStage2Status(job.job_id);
+        if (!alive) return;
+        setS2statuses(pages || {});
+        const e = await getEstimate(job.job_id);
+        if (alive && e) setEstimate(e);
+        const pending = Object.values(pages || {})
+          .some((s) => s === "pending" || s === "queued" || s === "running");
+        if (alive && pending) setTimeout(tick, 2500);
+      } catch { if (alive) setTimeout(tick, 4000); }
+    };
+    tick();
+    return () => { alive = false; };
   }, [view, job]);
-
-  // Re-fetch estimate while on Stage 3 as late sheets finish extracting.
-  // Stops once all sheets are terminal (done or error).
-  useEffect(() => {
-    if (view !== "stage3" || !job?.job_id) return;
-    const vals = Object.values(s2statuses);
-    const allTerminal = vals.length > 0 && vals.every((s) => s === "done" || s === "error");
-    if (allTerminal) return;
-    getEstimate(job.job_id).then(setEstimate).catch(() => {});
-  }, [s2statuses, view, job]);
 
   async function onRate(code, val) {
     const n = parseFloat(val);
@@ -722,9 +728,23 @@ export default function App({ onLogout }) {
             <span className="muted">Stage 3 · estimate · Outdoor Elements scope of work</span>
           </div>
 
-          {!estimate || !estimate.sections || estimate.sections.length === 0 ? (
-            <div className="status">No priced takeoff yet — detect material pages in Stage 2, then return here.</div>
-          ) : (() => {
+          {!estimate || !estimate.sections || estimate.sections.length === 0 ? (() => {
+            // Keep loading while extraction is still running (or status/estimate
+            // not back yet) — only dead-end once everything is genuinely terminal.
+            const vals = Object.values(s2statuses);
+            const total = vals.length;
+            const done = vals.filter((s) => s === "done").length;
+            const pending = vals.some((s) => s === "pending" || s === "queued" || s === "running");
+            if (estimate === null || pending || total === 0) {
+              return (
+                <div className="status estimate-loading">
+                  <span className="spinner" />
+                  Building estimate… {total ? `${done}/${total} sheets extracted` : "loading"}
+                </div>
+              );
+            }
+            return <div className="status">No priced takeoff yet — detect material pages in Stage 2, then return here.</div>;
+          })() : (() => {
             const money = (v) => `$${Math.round(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const sf = (rows) => Math.round(rows.reduce((n, r) => n + (r.qty || 0), 0)).toLocaleString();
             const titleCase = (s) => s.split(" / ")[0].toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());

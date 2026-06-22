@@ -26,6 +26,19 @@ steps:
       - us-central1
       - --platform
       - managed
+      # CPU stays allocated outside requests so background work (Stage-1 config +
+      # batch sheet extraction) actually runs — without this Cloud Run freezes
+      # background threads after the response and sheets never auto-extract.
+      - --no-cpu-throttling
+      # Real parallelism for the batch worker pool + headroom for concurrent
+      # heavy pages (fitz/OpenCV) so the instance doesn't OOM.
+      - --cpu
+      - '2'
+      - --memory
+      - '2Gi'
+      # Long requests (large uploads, slow Gemini calls) aren't cut short.
+      - --timeout
+      - '3600'
       - --quiet
 
 images:

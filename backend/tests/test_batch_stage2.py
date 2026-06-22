@@ -24,5 +24,5 @@ def test_detect_kept_pages_skips_done_and_runs_others(monkeypatch):
 
     out = tasks.detect_kept_pages("job1")
 
-    assert ran == [0, 2, 5]                 # only kept pages, in order, no page 1
+    assert sorted(ran) == [0, 2, 5]         # only kept pages, no page 1 (order varies — concurrent)
     assert out == {"detected": 3, "skipped": 0}

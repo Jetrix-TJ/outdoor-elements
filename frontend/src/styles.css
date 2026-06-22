@@ -109,7 +109,7 @@ header h1 .accent { color: var(--accent); }
   width: 44px; height: 2px; margin: 0 14px; border-radius: 2px; background: var(--border);
   transition: background var(--dur) var(--ease);
 }
-.stepper .stp-line.fill { background: var(--green); }
+.stepper .stp-line.fill { background: var(--accent); }
 .stepper .stp-dot {
   display: inline-flex; align-items: center; justify-content: center;
   width: 30px; height: 30px; border-radius: 50%; flex: 0 0 auto;
@@ -125,8 +125,8 @@ header h1 .accent { color: var(--accent); }
   border-color: var(--primary); background: var(--accent); color: #fff;
   box-shadow: 0 0 0 4px var(--surface-tint);
 }
-.stepper .stp.done { color: var(--green); }
-.stepper .stp.done .stp-dot { border-color: var(--green); background: var(--green); color: #fff; }
+.stepper .stp.done { color: var(--accent); }
+.stepper .stp.done .stp-dot { border-color: var(--accent); background: var(--accent); color: #fff; }
 @media (max-width: 640px) {
   .stepper .stp-label { display: none; }
   .stepper .stp-line { width: 22px; margin: 0 8px; }
@@ -153,7 +153,7 @@ header h1 .accent { color: var(--accent); }
   font-family: "Times New Roman", Georgia, serif; font-size: 14px; line-height: 1.5;
 }
 .oe-letterhead { text-align: center; margin-bottom: 4px; }
-.oe-brand { font-size: 28px; font-weight: 700; color: #2e7d32; letter-spacing: .3px; }
+.oe-brand { font-size: 28px; font-weight: 700; color: var(--accent); letter-spacing: .3px; }
 .oe-brand-tag { font-size: 10px; letter-spacing: 3px; color: #777; margin-top: 2px; }
 .oe-proj { text-align: center; color: #444; font-size: 12.5px; margin: 14px 0 18px; }
 .oe-exhibit { text-align: center; font-size: 15px; font-weight: 700; margin: 18px 0 4px; letter-spacing: .5px; }
@@ -782,3 +782,25 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
 }
 .prev-job-delete:hover { color: #d32f2f; background: #ffeaea; }
 .prev-job-delete:disabled { opacity: 0.4; cursor: default; }
+
+/* Stage 3 estimate loading (while sheets are still extracting) */
+.estimate-loading { display: flex; align-items: center; gap: 10px; }
+.estimate-loading .spinner {
+  width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid #c7d2cc; border-top-color: #2f7a4d;
+  animation: spin 0.8s linear infinite; flex: 0 0 auto;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* Clickable top stepper — jump between stages for a loaded job */
+.stepper .stp-btn {
+  display: inline-flex; align-items: center; gap: 10px;
+  background: none; border: 0; padding: 0; margin: 0; font: inherit;
+  color: inherit; cursor: default; -webkit-tap-highlight-color: transparent;
+}
+.stepper .stp.clickable .stp-btn { cursor: pointer; }
+.stepper .stp.clickable:hover { color: var(--text); }
+.stepper .stp.clickable:hover .stp-dot {
+  border-color: var(--accent); box-shadow: 0 0 0 3px rgba(66,133,244,.18);
+}
+.stepper .stp-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }

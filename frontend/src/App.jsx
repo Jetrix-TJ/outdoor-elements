@@ -143,21 +143,27 @@ export default function App({ onLogout }) {
     catch (e) { setError(e.message); }
   }
 
-  // load the combined OE estimate (all detected pages) when entering Stage 3
+  // While on Stage 3, keep the estimate + extraction status fresh so the page
+  // FILLS IN as sheets finish — instead of dead-ending on "no takeoff yet".
+  // Polls every 2.5s until every kept sheet is terminal (done/error).
   useEffect(() => {
     if (view !== "stage3" || !job?.job_id) return;
-    getEstimate(job.job_id).then(setEstimate).catch(() => {});
+    let alive = true;
+    const tick = async () => {
+      try {
+        const { pages } = await getStage2Status(job.job_id);
+        if (!alive) return;
+        setS2statuses(pages || {});
+        const e = await getEstimate(job.job_id);
+        if (alive && e) setEstimate(e);
+        const pending = Object.values(pages || {})
+          .some((s) => s === "pending" || s === "queued" || s === "running");
+        if (alive && pending) setTimeout(tick, 2500);
+      } catch { if (alive) setTimeout(tick, 4000); }
+    };
+    tick();
+    return () => { alive = false; };
   }, [view, job]);
-
-  // Re-fetch estimate while on Stage 3 as late sheets finish extracting.
-  // Stops once all sheets are terminal (done or error).
-  useEffect(() => {
-    if (view !== "stage3" || !job?.job_id) return;
-    const vals = Object.values(s2statuses);
-    const allTerminal = vals.length > 0 && vals.every((s) => s === "done" || s === "error");
-    if (allTerminal) return;
-    getEstimate(job.job_id).then(setEstimate).catch(() => {});
-  }, [s2statuses, view, job]);
 
   async function onRate(code, val) {
     const n = parseFloat(val);
@@ -329,6 +335,30 @@ export default function App({ onLogout }) {
     selectPage(firstIdx); // show the first sheet (loads when its detection completes)
   }
 
+  // Which stages can be jumped to from the top stepper. Stage 1 once a job is
+  // loaded; Stages 2 & 3 once page-selection (job.status) is done.
+  function canGoStage(n) {
+    if (!job) return false;
+    if (n === 1) return true;
+    return job.status === "done";
+  }
+
+  // Navigate via the clickable top stepper. Pure navigation — no batch re-kick;
+  // entering Stage 2 just makes sure a sheet is selected so the view isn't blank.
+  function navStage(n) {
+    if (!canGoStage(n)) return;
+    if (n === 1) { setView("stage1"); return; }
+    if (n === 2) {
+      setView("stage2");
+      if (s2page == null) {
+        const first = job.pages.find((p) => p.keep);
+        if (first) selectPage(first.index);
+      }
+      return;
+    }
+    if (n === 3) setView("stage3");
+  }
+
   const onDrop = (e) => {
     e.preventDefault();
     handleFile(e.dataTransfer.files);
@@ -355,7 +385,8 @@ export default function App({ onLogout }) {
         </p>
       </header>
 
-      <Stages current={view === "stage3" ? 3 : view === "stage2" ? 2 : 1} done={job?.status === "done"} />
+      <Stages current={view === "stage3" ? 3 : view === "stage2" ? 2 : 1} done={job?.status === "done"}
+              onGo={navStage} canGo={canGoStage} />
 
       {!job && (
         <div
@@ -722,9 +753,23 @@ export default function App({ onLogout }) {
             <span className="muted">Stage 3 · estimate · Outdoor Elements scope of work</span>
           </div>
 
-          {!estimate || !estimate.sections || estimate.sections.length === 0 ? (
-            <div className="status">No priced takeoff yet — detect material pages in Stage 2, then return here.</div>
-          ) : (() => {
+          {!estimate || !estimate.sections || estimate.sections.length === 0 ? (() => {
+            // Keep loading while extraction is still running (or status/estimate
+            // not back yet) — only dead-end once everything is genuinely terminal.
+            const vals = Object.values(s2statuses);
+            const total = vals.length;
+            const done = vals.filter((s) => s === "done").length;
+            const pending = vals.some((s) => s === "pending" || s === "queued" || s === "running");
+            if (estimate === null || pending || total === 0) {
+              return (
+                <div className="status estimate-loading">
+                  <span className="spinner" />
+                  Building estimate… {total ? `${done}/${total} sheets extracted` : "loading"}
+                </div>
+              );
+            }
+            return <div className="status">No priced takeoff yet — detect material pages in Stage 2, then return here.</div>;
+          })() : (() => {
             const money = (v) => `$${Math.round(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const sf = (rows) => Math.round(rows.reduce((n, r) => n + (r.qty || 0), 0)).toLocaleString();
             const titleCase = (s) => s.split(" / ")[0].toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
@@ -885,7 +930,7 @@ function ConfigPanel({ jobId, config, setConfig }) {
   );
 }
 
-function Stages({ current, done }) {
+function Stages({ current, done, onGo, canGo }) {
   return (
     <ol className="stepper" aria-label="Progress">
       {STAGES.map((s, i) => {
@@ -895,15 +940,27 @@ function Stages({ current, done }) {
             : s.n === current
             ? "current"
             : "todo";
+        // A step is navigable when the parent says it's reachable and it isn't
+        // the page we're already on.
+        const clickable = !!(canGo && canGo(s.n)) && s.n !== current;
         return (
-          <li key={s.n} className={`stp ${state}`} aria-current={state === "current" ? "step" : undefined}>
+          <li key={s.n}
+              className={`stp ${state}${clickable ? " clickable" : ""}`}
+              aria-current={state === "current" ? "step" : undefined}>
             {i > 0 && <span className={`stp-line ${s.n <= current ? "fill" : ""}`} aria-hidden="true" />}
-            <span className="stp-dot">
-              {state === "done"
-                ? <span className="material-symbols-outlined">check</span>
-                : s.n}
-            </span>
-            <span className="stp-label">{s.name}</span>
+            <button
+              type="button"
+              className="stp-btn"
+              disabled={!clickable}
+              onClick={() => clickable && onGo(s.n)}
+              title={clickable ? `Go to ${s.name}` : undefined}>
+              <span className="stp-dot">
+                {state === "done"
+                  ? <span className="material-symbols-outlined">check</span>
+                  : s.n}
+              </span>
+              <span className="stp-label">{s.name}</span>
+            </button>
           </li>
         );
       })}

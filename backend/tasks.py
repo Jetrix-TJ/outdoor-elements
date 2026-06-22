@@ -335,21 +335,46 @@ def stage2_detect_all(job_id: str) -> dict:
     return detect_kept_pages(job_id)
 
 
+# How many kept pages to extract at once. Each page is independent (own fitz
+# doc, own per-call DB session, own Gemini calls), so a small pool cuts the
+# batch wall-clock from sum-of-pages to ~sum/WORKERS. Tune with OE_BATCH_WORKERS.
+_BATCH_WORKERS = max(1, int(os.environ.get("OE_BATCH_WORKERS", "3")))
+
+
 def detect_kept_pages(job_id: str) -> dict:
-    """Detect every KEPT page of the job, sequentially. Resume-safe: run_stage2
-    returns the saved result for an already-done page, so re-runs are cheap."""
+    """Detect every KEPT page of the job CONCURRENTLY (small worker pool) so the
+    whole set finishes in a fraction of the sequential time — the user no longer
+    waits minutes per sheet. Resume-safe: already-done pages are skipped and
+    run_stage2 guards against double-processing a page. One page failing does not
+    abort the rest."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     status = store.read_status(job_id) or {}
-    detected = skipped = 0
-    for p in status.get("pages", []):
-        if not p.get("keep"):
-            continue
-        page = int(p["index"])
-        before = store.read_stage2(job_id, page)
-        if before and before.get("status") == "done":
+    pages = [int(p["index"]) for p in status.get("pages", []) if p.get("keep")]
+    todo, skipped = [], 0
+    for page in pages:
+        before = store.read_stage2(job_id, page) or {}
+        if before.get("status") == "done":
             skipped += 1
             continue
-        run_stage2(job_id, page)
-        detected += 1
+        # A page stuck at "running" (e.g. the backend restarted mid-batch) has no
+        # worker behind it and run_stage2 would skip it — requeue so it reruns.
+        if before.get("status") == "running":
+            store.write_stage2(job_id, page,
+                               {"job_id": job_id, "page": page, "status": "queued"})
+        todo.append(page)
+
+    detected = 0
+    if todo:
+        workers = min(_BATCH_WORKERS, len(todo))
+        with ThreadPoolExecutor(max_workers=workers) as ex:
+            futs = {ex.submit(run_stage2, job_id, pg): pg for pg in todo}
+            for f in as_completed(futs):
+                try:
+                    f.result()
+                    detected += 1
+                except Exception:  # noqa: BLE001 — keep the batch going on a bad page
+                    pass
     return {"detected": detected, "skipped": skipped}
 
 

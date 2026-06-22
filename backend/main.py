@@ -606,15 +606,17 @@ async def start_job(job_id: str, background: BackgroundTasks, filename: str = ""
     The browser PUTs the PDF straight into the GCS jobs bucket, which is NOT the
     container's local disk. So before processing we pull the blob down to the
     local job path the pipeline reads from (store.pdf_path). If it's already
-    present (local dev, or a FUSE mount), we skip the download."""
-    pdf = store.pdf_path(job_id)
+    present (local dev, or a FUSE mount), we skip the download. The whole body is
+    wrapped so any failure returns a readable message, not a blank 500."""
+    import traceback
     try:
-        have_local = pdf.exists()
-    except Exception:  # noqa: BLE001 — a mount glitch shouldn't crash the request
-        have_local = False
-
-    if not have_local:
+        pdf = store.pdf_path(job_id)
         try:
+            have_local = pdf.exists()
+        except Exception:  # noqa: BLE001 — a mount glitch shouldn't crash the request
+            have_local = False
+
+        if not have_local:
             from google.cloud import storage as gcs
             blob = gcs.Client().bucket(GCS_JOBS_BUCKET).blob(f"{job_id}/upload.pdf")
             if not blob.exists():
@@ -622,20 +624,21 @@ async def start_job(job_id: str, background: BackgroundTasks, filename: str = ""
                                     detail="PDF not found — ensure the GCS upload completed.")
             pdf.parent.mkdir(parents=True, exist_ok=True)
             blob.download_to_filename(str(pdf))
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            raise HTTPException(status_code=500,
-                                detail=f"Could not fetch the uploaded PDF from storage: {exc}")
 
-    store.write_status(job_id, {"job_id": job_id, "filename": filename, "status": "queued"})
-    if EAGER:
-        background.add_task(run_stage1, job_id, filename)
-        background.add_task(run_stage1_config, job_id, filename)
-    else:
-        stage1_select.delay(job_id, filename)
-        stage1_config.delay(job_id, filename)
-    return UploadResponse(job_id=job_id, filename=filename, eager=EAGER)
+        store.write_status(job_id, {"job_id": job_id, "filename": filename, "status": "queued"})
+        if EAGER:
+            background.add_task(run_stage1, job_id, filename)
+            background.add_task(run_stage1_config, job_id, filename)
+        else:
+            stage1_select.delay(job_id, filename)
+            stage1_config.delay(job_id, filename)
+        return UploadResponse(job_id=job_id, filename=filename, eager=EAGER)
+    except HTTPException:
+        raise
+    except Exception as exc:  # noqa: BLE001 — surface the real cause instead of a blank 500
+        print("start_job failed:\n" + traceback.format_exc())
+        raise HTTPException(status_code=500,
+                            detail=f"start failed: {type(exc).__name__}: {exc}")
 
 
 # ---------- SPA catch-all (production: Cloud Run serves both API + frontend) ----------

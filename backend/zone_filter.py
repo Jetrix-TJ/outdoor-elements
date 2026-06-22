@@ -115,7 +115,7 @@ def _classify_with_gemini(
         warnings.simplefilter("ignore")
         genai.configure(api_key=api_key)
 
-    model = genai.GenerativeModel("gemini-2.0-flash")
+    model = genai.GenerativeModel("gemini-3.5-flash")
 
     prompt = (
         f"You are reviewing a construction plan drawing. "

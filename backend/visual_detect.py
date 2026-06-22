@@ -131,3 +131,14 @@ def count_takeoff_rows(pdf: str, page: int, api_key: str | None = None,
     """Vision-detect a page and return (count rows, all annotations)."""
     anns = detect_annotations(pdf, page, api_key, dpi)
     return count_rows(anns), anns
+
+
+def material_targets(annotations: list[dict]) -> list[dict]:
+    """Material arrow-targets in the zone engine's tag format ({code, x, y} in PDF
+    points) — feed to qto_engine.run_sheet(tags_override=...) so each zone is
+    claimed where the arrow POINTS, not at the label (Phase 2)."""
+    out = []
+    for a in annotations:
+        if a.get("type") == "material" and a.get("code") and a.get("pt"):
+            out.append({"code": a["code"], "x": float(a["pt"][0]), "y": float(a["pt"][1])})
+    return out

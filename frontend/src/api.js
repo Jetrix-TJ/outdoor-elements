@@ -11,12 +11,14 @@ export async function login(passcode) {
   return res.json();
 }
 
-export async function uploadPdf(file) {
+export async function uploadPdf(files) {
+  // accepts a single File or a FileList/array — merged into one set server-side
+  const list = files && files.length !== undefined ? Array.from(files) : [files];
   const form = new FormData();
-  form.append("file", file);
+  for (const f of list) form.append("files", f);
   const res = await fetch("/api/upload", { method: "POST", body: form });
   if (!res.ok) throw new Error((await res.json()).detail || "Upload failed");
-  return res.json(); // { job_id, filename, eager }
+  return res.json(); // { job_id, filename, eager, resumed }
 }
 
 export async function getJob(jobId) {
@@ -146,6 +148,13 @@ export async function editRate(jobId, page, code, rate) {
     body: JSON.stringify({ code, rate }),
   });
   if (!res.ok) throw new Error("Could not update rate");
+  return res.json();
+}
+
+// Combined project estimate (all detected pages) in OE scope-of-work format.
+export async function getEstimate(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/estimate`);
+  if (!res.ok) throw new Error("Could not load estimate");
   return res.json();
 }
 

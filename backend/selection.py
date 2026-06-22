@@ -119,13 +119,29 @@ def _corner_title(page: fitz.Page) -> str:
     return _corner_title_clip(page) or _title_fallback(page)
 
 
+# sheet number as written: L1.01, L5.02, LS102, LP-101, A101, C6.1 …
+_SHEET_TOK = re.compile(r"^\(?([A-Z]{1,3}[-.]?\d{1,3}(?:[.\-]\d{1,2})?[A-Z]?)\)?$")
+
+
 def _sheet_code(page: fitz.Page) -> str:
-    """Sheet code from the title-block band, falling back to anywhere on the page."""
+    """Sheet code from the title-block band, else the LARGEST sheet-number-like
+    text anywhere on the page (handles title blocks outside the cropbox and
+    no-dot codes like LS102), else any dotted code."""
     r = page.rect
     band = page.get_text("text", clip=fitz.Rect(r.width * 0.78, r.height * 0.55, r.width, r.height))
     m = _CODE_ANY.findall(band)
     if m:
         return m[-1]
+    # font-size fallback: the sheet number is usually the biggest code-like text
+    best_size, best = 0.0, None
+    for b in page.get_text("dict")["blocks"]:
+        for line in b.get("lines", []):
+            for s in line["spans"]:
+                mm = _SHEET_TOK.match(s["text"].strip())
+                if mm and not _BOILER.search(s["text"].upper()) and s["size"] > best_size:
+                    best_size, best = s["size"], mm.group(1)
+    if best:
+        return best
     m = _CODE_ANY.findall(page.get_text("text"))
     return m[0] if m else "?"
 

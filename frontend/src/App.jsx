@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   uploadPdf, pollJob, thumbUrl, previewUrl,
   startStage2, pollStage2, stage2OverlayUrl,
-  getConfig, editScale, getPricing, editRate,
+  getConfig, editScale, getPricing, editRate, getEstimate,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
   getPoolScope,
@@ -61,6 +61,7 @@ export default function App({ onLogout }) {
   const [config, setConfig] = useState(null);   // Gemini auto-config (reviewable)
   const [editMode, setEditMode] = useState(false); // interactive select on the overlay
   const [pricing, setPricing] = useState(null);  // costed estimate for the page
+  const [estimate, setEstimate] = useState(null); // combined OE estimate (all pages)
   const [overlayKey, setOverlayKey] = useState(0); // cache-bust for the overlay image
   const [zones, setZones] = useState([]);          // active zones (id-addressable + geometry)
   const [deletedZones, setDeletedZones] = useState([]); // soft-deleted zones
@@ -138,32 +139,36 @@ export default function App({ onLogout }) {
     catch (e) { setError(e.message); }
   }
 
-  // load pricing when entering Stage 3 (or after an edit clears it)
+  // load the combined OE estimate (all detected pages) when entering Stage 3
   useEffect(() => {
-    if (view !== "stage3" || s2?.status !== "done" || pricing || !job?.job_id) return;
-    getPricing(job.job_id, s2page).then(setPricing).catch(() => {});
-  }, [view, s2, pricing, job, s2page]);
+    if (view !== "stage3" || !job?.job_id) return;
+    getEstimate(job.job_id).then(setEstimate).catch(() => {});
+  }, [view, job]);
 
   async function onRate(code, val) {
     const n = parseFloat(val);
     if (!(n >= 0)) return;
-    setPricing(await editRate(job.job_id, s2page, code, n));
+    await editRate(job.job_id, s2page ?? 0, code, n);   // rates are per-job
+    getEstimate(job.job_id).then(setEstimate).catch(() => {});  // refresh totals
   }
 
-  // Download the costed estimate as a CSV file (Stage 3).
+  // Download the combined OE estimate as a CSV (Stage 3): section, subsection, line.
   function downloadPricingCsv() {
-    if (!pricing) return;
+    if (!estimate || !estimate.sections) return;
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const rows = [["Material", "Description", "Quantity", "Unit", "Rate ($)", "Cost ($)"]];
-    pricing.rows.forEach((r) =>
-      rows.push([r.code, r.name || "", r.qty, r.unit, r.rate, r.cost]));
-    rows.push(["", "", "", "", "Total", pricing.total]);
+    const rows = [["Section", "Subsection", "Code", "Description", "Quantity", "Unit", "Rate ($)", "Cost ($)"]];
+    const push = (sec, sub, r) => rows.push([sec, sub, r.code, r.name || "", r.qty, r.unit, r.rate, r.cost]);
+    estimate.sections.forEach((sec) => {
+      sec.subsections.forEach((s) => s.lines.forEach((r) => push(sec.name, s.name, r)));
+      sec.lines.forEach((r) => push(sec.name, "", r));
+    });
+    rows.push(["", "", "", "", "", "", "GRAND TOTAL", estimate.grand_total]);
     const csv = rows.map((r) => r.map(esc).join(",")).join("\r\n");
     const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `estimate_${job.job_id}_p${s2page}.csv`;
+    a.download = `OE_estimate_${job.job_id}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -183,8 +188,9 @@ export default function App({ onLogout }) {
     return () => { alive = false; };
   }, [job?.job_id, config]);
 
-  async function handleFile(file) {
-    if (!file) return;
+  async function handleFile(files) {
+    const list = Array.from(files && files.length !== undefined ? files : [files]).filter(Boolean);
+    if (!list.length) return;
     setError(null);
     setBusy(true);
     setJob(null);
@@ -192,7 +198,7 @@ export default function App({ onLogout }) {
     setS2(null);
     setConfig(null);
     try {
-      const up = await uploadPdf(file);
+      const up = await uploadPdf(list);
       setEager(up.eager);
       setResumed(!!up.resumed);
       await pollJob(up.job_id, (j) => setJob({ ...j, job_id: up.job_id }));
@@ -242,7 +248,7 @@ export default function App({ onLogout }) {
 
   const onDrop = (e) => {
     e.preventDefault();
-    handleFile(e.dataTransfer.files?.[0]);
+    handleFile(e.dataTransfer.files);
   };
 
   const kept = job?.pages?.filter((p) => p.keep) ?? [];
@@ -279,15 +285,16 @@ export default function App({ onLogout }) {
             ref={fileRef}
             type="file"
             accept="application/pdf"
+            multiple
             hidden
-            onChange={(e) => handleFile(e.target.files?.[0])}
+            onChange={(e) => handleFile(e.target.files)}
           />
           {busy ? (
             <p>Working…</p>
           ) : (
             <>
-              <p className="big">Drop the drawing PDF here</p>
-              <p className="muted">or click to browse · vector PDF, no AI needed for this step</p>
+              <p className="big">Drop the drawing PDF(s) here</p>
+              <p className="muted">or click to browse · one or more vector PDFs — merged into one set</p>
             </>
           )}
         </div>
@@ -549,22 +556,40 @@ export default function App({ onLogout }) {
                   );
                 })() : null}
 
-                {Array.isArray(s2.takeoff) && s2.takeoff.some((t) => t.unit !== "area" && t.quantity) && (
+                {Array.isArray(s2.takeoff) && s2.takeoff.some((t) => t.unit !== "area" && t.quantity && t.source !== "planting") && (
                   <div className="zones-block">
                     <div className="panel-head">
                       <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">straighten</span></span>
                       <h3>Walls &amp; Counts <span className="muted">(linear &amp; count)</span></h3>
                     </div>
-                    <p className="hint">Measured by the per-material brain — walls/borders in linear feet, trees/benches/columns as counts.</p>
+                    <p className="hint">Measured by the per-material brain — walls/borders in linear feet, benches/columns as counts.</p>
                     <ul className="surflist">
-                      {s2.takeoff.filter((t) => t.unit !== "area" && t.quantity).map((t) => (
-                        <li key={t.code} className="zonerow">
+                      {s2.takeoff.filter((t) => t.unit !== "area" && t.quantity && t.source !== "planting").map((t) => (
+                        <li key={`${t.code}-${t.name}`} className="zonerow">
                           <span className={`unit-chip ${t.unit}`}>{t.unit === "linear" ? "LF" : "EA"}</span>
                           <code>{t.code}</code>
                           <span className="tk-name muted">{t.name}</span>
-                          <span className="sqft">
-                            {t.quantity.toLocaleString()} {t.unit_label}
-                          </span>
+                          <span className="sqft">{t.quantity.toLocaleString()} {t.unit_label}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
+                {Array.isArray(s2.takeoff) && s2.takeoff.some((t) => t.source === "planting" && t.quantity) && (
+                  <div className="zones-block">
+                    <div className="panel-head">
+                      <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">forest</span></span>
+                      <h3>Plants <span className="muted">({s2.takeoff.filter((t) => t.source === "planting" && t.quantity).reduce((n, t) => n + t.quantity, 0).toLocaleString()} total)</span></h3>
+                    </div>
+                    <p className="hint">Per-species counts — schedule-anchored, via the visual model (gemini-3.1-pro).</p>
+                    <ul className="surflist">
+                      {s2.takeoff.filter((t) => t.source === "planting" && t.quantity).map((t) => (
+                        <li key={`pl-${t.code}`} className="zonerow">
+                          <span className="unit-chip count">EA</span>
+                          <code>{t.code}</code>
+                          <span className="tk-name muted">{t.name}</span>
+                          <span className="sqft">{t.quantity.toLocaleString()} each</span>
                         </li>
                       ))}
                     </ul>
@@ -592,153 +617,69 @@ export default function App({ onLogout }) {
       {job?.status === "done" && view === "stage3" && (
         <section className="results">
           <div className="s2bar">
-            <span className="muted">Stage 3 · measure square footage · our output vs human QTO</span>
+            <span className="muted">Stage 3 · estimate · Outdoor Elements scope of work</span>
           </div>
 
-          {!s2 || s2.status !== "done" ? (
-            <div className="status">Run Stage 2 first.</div>
-          ) : (
-            <>
-              {s2.comparison ? (
-                <>
-                  <div className={`verdict ${s2.comparison.mape != null && s2.comparison.mape < 5 ? "match" : "near"}`}>
-                    {s2.comparison.mape != null
-                      ? `Our takeoff vs human QTO — overall error (MAPE) ${s2.comparison.mape}% across ${s2.comparison.matched} matched materials`
-                      : "Measured — no overlapping ground-truth values to score"}
-                  </div>
-                  <div className="s2grid">
-                    <div className="s2img">
-                      <img src={`${stage2OverlayUrl(job.job_id, s2page)}?v=${s2page}-${overlayKey}`} alt="measured surfaces" />
-                    </div>
-                    <div className="s2side">
-                      <table className="cmp3">
-                        <thead>
-                          <tr><th>Material</th><th>Human</th><th>Ours</th><th>Δ</th></tr>
-                        </thead>
-                        <tbody>
-                          {s2.comparison.rows.map((r) => {
-                            const e = r.error_pct;
-                            const cls = e == null ? "" : Math.abs(e) < 5 ? "ok" : Math.abs(e) < 15 ? "warn" : "bad";
-                            return (
-                              <tr key={r.code}>
-                                <td><code>{r.code}</code> {r.name}</td>
-                                <td>{r.ground_truth.toLocaleString()}</td>
-                                <td>{r.measured != null ? Math.round(r.measured).toLocaleString() : "—"}</td>
-                                <td className={cls}>{e == null ? "—" : `${e > 0 ? "+" : ""}${e}%`}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                      <p className="hint">
-                        Human = sq-ft values printed in the sheet legend (the human takeoff).
-                        Ours = measured from the vector geometry × scale.
-                      </p>
-                    </div>
-                  </div>
-                </>
-              ) : s2.validation && s2.validation.length ? (
-                <>
-                  <div className={`verdict ${s2.validation.every((v) => v.delta_pct == null || Math.abs(v.delta_pct) < 10) ? "match" : "near"}`}>
-                    Engine takeoff vs QTO reference — {s2.validation.filter((v) => v.delta_pct != null && Math.abs(v.delta_pct) < 10).length}/{s2.validation.length} within 10%
-                  </div>
-                  <div className="s2grid">
-                    <div className="s2img">
-                      <img src={`${stage2OverlayUrl(job.job_id, s2page)}?v=${s2page}-${overlayKey}`} alt="measured surfaces" />
-                    </div>
-                    <div className="s2side">
-                      <table className="cmp3">
-                        <thead><tr><th>Material</th><th>QTO ref</th><th>Ours</th><th>Δ</th></tr></thead>
-                        <tbody>
-                          {s2.validation.map((v) => {
-                            const e = v.delta_pct;
-                            const cls = e == null ? "" : Math.abs(e) < 5 ? "ok" : Math.abs(e) < 15 ? "warn" : "bad";
-                            return (
-                              <tr key={v.code}>
-                                <td><code>{v.code}</code></td>
-                                <td>{v.reference.toLocaleString()}</td>
-                                <td>{v.computed != null ? Math.round(v.computed).toLocaleString() : "—"}</td>
-                                <td className={cls}>{e == null ? "—" : `${e > 0 ? "+" : ""}${e}%`}</td>
-                              </tr>
-                            );
-                          })}
-                        </tbody>
-                      </table>
-                      <p className="hint">
-                        QTO ref = the human takeoff values. Ours = line-width zone engine
-                        (M.5/M.7 within ~2%; some materials over-claim — a known engine limit).
-                      </p>
-                    </div>
-                  </div>
-                </>
-              ) : (
-                <div className="note-box">
-                  <p><b>No human ground-truth on this sheet to compare against.</b></p>
-                  <p className="muted">
-                    The raw drawing's legend prints material names but no sq-ft values — the human
-                    takeoff numbers live only in the <b>QTO</b>. Upload <code>2811 KIRBY QTO.pdf</code>
-                    and run Stage 2 → Stage 3 to see our output line up against the human QTO.
-                  </p>
-                  <table className="cmp3">
-                    <thead><tr><th>Material</th><th>Our measure (sq ft)</th></tr></thead>
-                    <tbody>
-                      {(s2.groups || []).map((g) => (
-                        <tr key={g.label || g.hex}>
-                          <td><code>{g.label || g.hex}</code></td>
-                          <td>{g.sqft ? g.sqft.toLocaleString() : "—"}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+          {!estimate || !estimate.sections || estimate.sections.length === 0 ? (
+            <div className="status">No priced takeoff yet — detect material pages in Stage 2, then return here.</div>
+          ) : (() => {
+            const money = (v) => `$${Math.round(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+            const sf = (rows) => Math.round(rows.reduce((n, r) => n + (r.qty || 0), 0)).toLocaleString();
+            // a scope item: "Provide and install <Material> (<qty> SF)  @ $<rate>/SF"
+            const item = (r) => (
+              <li key={r.code} className="oe-item">
+                Provide and install <b>{r.name || r.code}</b> ({r.qty.toLocaleString()} SF)
+                <span className="oe-at"> @ $
+                  <input
+                    className="rate-in" type="number" min="0" step="0.5"
+                    defaultValue={r.rate}
+                    onBlur={(e) => onRate(r.code, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                  />/SF
+                </span>
+              </li>
+            );
+            return (
+              <section className="pricing oe-scope-doc">
+                <div className="panel-head">
+                  <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">request_quote</span></span>
+                  <h3>Scope of Work <span className="muted">· Outdoor Elements · all {estimate.page_count} detected page(s)</span></h3>
+                  <button className="csv-btn" onClick={downloadPricingCsv} title="Download as CSV">
+                    <span className="material-symbols-outlined">download</span> CSV
+                  </button>
                 </div>
-              )}
-            </>
-          )}
-
-          {s2?.status === "done" && pricing && (
-            <section className="pricing">
-              <div className="panel-head">
-                <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">request_quote</span></span>
-                <h3>Costed estimate <span className="muted">· quantity × unit rate</span></h3>
-                <button className="csv-btn" onClick={downloadPricingCsv} title="Download estimate as CSV">
-                  <span className="material-symbols-outlined">download</span> CSV
-                </button>
-              </div>
-              <table className="price-table">
-                <thead>
-                  <tr><th>Material</th><th>Qty</th><th>Unit</th><th>Rate ($)</th><th>Cost ($)</th></tr>
-                </thead>
-                <tbody>
-                  {pricing.rows.map((r) => (
-                    <tr key={r.code}>
-                      <td><code>{r.code}</code> {r.name}</td>
-                      <td>{r.qty.toLocaleString()}</td>
-                      <td>{r.unit}</td>
-                      <td>
-                        $<input
-                          className="rate-in" type="number" min="0" step="0.5"
-                          defaultValue={r.rate}
-                          onBlur={(e) => onRate(r.code, e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                        />
-                      </td>
-                      <td className="cost">${r.cost.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={4}><b>Total</b></td>
-                    <td className="total">${pricing.total.toLocaleString()}</td>
-                  </tr>
-                </tfoot>
-              </table>
-              <p className="hint">
-                Starter $/sq-ft rates — edit any rate (Enter) and the cost + total update.
-                Quantities reflect any zones you removed in Stage 2.
-              </p>
-            </section>
-          )}
+                {estimate.sections.map((sec) => {
+                  const allRows = [...sec.lines, ...sec.subsections.flatMap((s) => s.lines)];
+                  return (
+                    <div className="oe-disc" key={sec.name}>
+                      <h4 className="oe-disc-head">{sec.name} <span className="oe-sf">({sf(allRows)} SF)</span></h4>
+                      {sec.subsections.map((s) => (
+                        <div className="oe-subsec" key={s.name}>
+                          <div className="oe-subsec-head">
+                            <span>{s.name}</span><span className="oe-lump">{money(s.total)}</span>
+                          </div>
+                          <ol className="oe-scope">{s.lines.map(item)}</ol>
+                        </div>
+                      ))}
+                      {sec.lines.length > 0 && <ol className="oe-scope">{sec.lines.map(item)}</ol>}
+                      <div className="oe-disc-total">
+                        <span>{sec.name.split(" / ")[0].replace(/\b\w/g, (c) => c)} Total:</span>
+                        <span>{money(sec.total)}</span>
+                      </div>
+                    </div>
+                  );
+                })}
+                <div className="oe-grand">
+                  <span>GRAND TOTAL</span>
+                  <span>{money(estimate.grand_total)}</span>
+                </div>
+                <p className="hint">
+                  Outdoor Elements scope of work, combined across all detected pages.
+                  Edit any $/SF rate (Enter) — the subsection lump sum, section and grand total update.
+                </p>
+              </section>
+            );
+          })()}
         </section>
       )}
 

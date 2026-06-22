@@ -143,6 +143,68 @@ header h1 .accent { color: var(--accent); }
 .csv-btn:hover { background: var(--surface-tint); border-color: var(--primary); }
 .csv-btn .material-symbols-outlined { font-size: 18px; }
 
+/* OE narrative SCOPE-OF-WORK document (numbered items, subsection lump sums) */
+.oe-scope-doc { margin-top: 8px; }
+.oe-disc { margin: 0 0 22px; }
+.oe-disc-head {
+  margin: 0 0 6px; font-size: 15px; font-weight: 700; letter-spacing: .5px;
+  color: var(--text); border-bottom: 2px solid var(--text); padding-bottom: 6px;
+}
+.oe-disc-head .oe-sf { font-size: 12px; font-weight: 500; color: var(--muted); letter-spacing: 0; }
+.oe-subsec { margin: 10px 0; }
+.oe-subsec-head {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-weight: 600; font-size: 13.5px; color: var(--text);
+  border-bottom: 1px dotted var(--border); padding-bottom: 3px;
+}
+.oe-subsec-head .oe-lump { color: var(--primary); font-variant-numeric: tabular-nums; }
+.oe-scope { margin: 6px 0 8px; padding-left: 32px; list-style: decimal; }
+.oe-item { padding: 3px 0; line-height: 1.55; font-size: 13px; color: var(--text); }
+.oe-at { color: var(--muted); white-space: nowrap; }
+.oe-at .rate-in { width: 50px; }
+.oe-disc-total {
+  display: flex; justify-content: space-between; margin-top: 8px; padding: 6px 4px;
+  border-top: 1px solid var(--border); font-weight: 600; font-size: 13.5px;
+  font-variant-numeric: tabular-nums;
+}
+/* OE scope-of-work style estimate (sectioned, not a flat table) */
+.oe-estimate { margin-top: 8px; }
+.oe-section { margin: 0 0 14px; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.oe-sec-head {
+  display: flex; justify-content: space-between; align-items: center;
+  background: var(--surface-alt); padding: 10px 14px;
+  font-weight: 600; font-size: 13px; letter-spacing: .4px; color: var(--text);
+  border-bottom: 1px solid var(--border);
+}
+.oe-sec-total { color: var(--primary); font-variant-numeric: tabular-nums; }
+.oe-sub { border-top: 1px solid #f0f0f3; }
+.oe-sub-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 7px 14px 7px 26px; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  background: #fcfcfd;
+}
+.oe-sub-head span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
+.oe-lines { list-style: none; margin: 0; padding: 4px 0; }
+/* flowing scope lines (not a column grid): "CODE  Description  qty @ $rate ... $cost" */
+.oe-line {
+  display: flex; align-items: center; justify-content: space-between; gap: 14px;
+  padding: 7px 14px 7px 26px; font-size: 13px; border-bottom: 1px solid #f3f3f5;
+}
+.oe-line:last-child { border-bottom: none; }
+.oe-line:hover { background: #fafbfc; }
+.oe-line-main { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }
+.oe-code { font-size: 12px; color: var(--muted); flex: 0 0 auto; }
+.oe-desc { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.oe-meta { color: var(--muted); white-space: nowrap; flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+.oe-meta .rate-in { width: 52px; }
+.oe-cost { font-weight: 600; color: var(--text); font-variant-numeric: tabular-nums; flex: 0 0 auto; }
+.oe-grand {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 14px 16px; margin-top: 6px; border-radius: 10px;
+  background: var(--text); color: #fff; font-weight: 700; font-size: 15px; letter-spacing: .5px;
+}
+.oe-grand span:last-child { font-variant-numeric: tabular-nums; }
+
 /* ── dropzone ──────────────────────────────────────────────────────── */
 .dropzone {
   border: 2px dashed var(--divider); border-radius: var(--radius-card); padding: 72px 24px;
@@ -222,6 +284,9 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
 .anypage input { width: 64px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; }
 
 .s2grid { display: grid; grid-template-columns: 1fr 280px; gap: 20px; align-items: start; }
+/* pin the plan to the top so it follows while you scroll the (taller) panel,
+   instead of leaving a big empty gap under a short landscape sheet */
+.s2grid > .s2img { position: sticky; top: 16px; align-self: start; }
 .s2img { position: relative; background: #fff; border: 1px solid var(--border); border-radius: var(--radius-card); overflow: hidden; box-shadow: var(--elev-1); }
 .s2img img { display: block; width: 100%; }
 .s2img.editing img { cursor: crosshair; }

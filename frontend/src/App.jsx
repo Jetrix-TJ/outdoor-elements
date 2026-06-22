@@ -689,50 +689,68 @@ export default function App({ onLogout }) {
             </>
           )}
 
-          {s2?.status === "done" && pricing && (
-            <section className="pricing">
-              <div className="panel-head">
-                <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">request_quote</span></span>
-                <h3>Costed estimate <span className="muted">· quantity × unit rate</span></h3>
-                <button className="csv-btn" onClick={downloadPricingCsv} title="Download estimate as CSV">
-                  <span className="material-symbols-outlined">download</span> CSV
-                </button>
-              </div>
-              <table className="price-table">
-                <thead>
-                  <tr><th>Material</th><th>Qty</th><th>Unit</th><th>Rate ($)</th><th>Cost ($)</th></tr>
-                </thead>
-                <tbody>
-                  {pricing.rows.map((r) => (
-                    <tr key={r.code}>
-                      <td><code>{r.code}</code> {r.name}</td>
-                      <td>{r.qty.toLocaleString()}</td>
-                      <td>{r.unit}</td>
-                      <td>
-                        $<input
-                          className="rate-in" type="number" min="0" step="0.5"
-                          defaultValue={r.rate}
-                          onBlur={(e) => onRate(r.code, e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                        />
-                      </td>
-                      <td className="cost">${r.cost.toLocaleString()}</td>
-                    </tr>
-                  ))}
-                </tbody>
-                <tfoot>
-                  <tr>
-                    <td colSpan={4}><b>Total</b></td>
-                    <td className="total">${pricing.total.toLocaleString()}</td>
-                  </tr>
-                </tfoot>
-              </table>
-              <p className="hint">
-                Starter $/sq-ft rates — edit any rate (Enter) and the cost + total update.
-                Quantities reflect any zones you removed in Stage 2.
-              </p>
-            </section>
-          )}
+          {s2?.status === "done" && pricing && (() => {
+            // group line items into Outdoor-Elements scope sections (like the OE
+            // proposal: Swimming Pool/Spa, Hardscape, Landscape) instead of a flat
+            // table — section subtotals roll up to a grand total.
+            // stems (leading boundary only) so plurals/suffixes match too
+            const SECTIONS = [
+              { name: "SWIMMING POOL & SPA", re: /\b(pool|spa|tanning|aquatic|water\s*feature)/i },
+              { name: "HARDSCAPE", re: /\b(paver|concrete|tile|stone|wall|border|edg|coping|band|gravel|granite|boulder|rock|pebble|step|stair|deck|veneer|surface|pavement|sidewalk|patio)/i },
+              { name: "LANDSCAPE / PLANTING", re: /\b(tree|shrub|plant|grass|turf|sod|ground\s*cover|annual|perennial|mulch|palm|vine|holly|oak|fern|sage|azalea|boxwood|liriope|nandina)/i },
+            ];
+            const sectionOf = (r) => (SECTIONS.find((s) => s.re.test(`${r.name || ""} ${r.code || ""}`))?.name) || "OTHER / GENERAL";
+            const groups = {};
+            for (const r of pricing.rows) (groups[sectionOf(r)] ||= []).push(r);
+            const order = [...SECTIONS.map((s) => s.name), "OTHER / GENERAL"].filter((n) => groups[n]);
+            const sub = (rows) => rows.reduce((n, r) => n + (r.cost || 0), 0);
+            const money = (v) => `$${Math.round(v).toLocaleString()}`;
+            return (
+              <section className="pricing oe-estimate">
+                <div className="panel-head">
+                  <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">request_quote</span></span>
+                  <h3>Estimate <span className="muted">· Outdoor Elements scope of work</span></h3>
+                  <button className="csv-btn" onClick={downloadPricingCsv} title="Download as CSV">
+                    <span className="material-symbols-outlined">download</span> CSV
+                  </button>
+                </div>
+                {order.map((name) => (
+                  <div className="oe-section" key={name}>
+                    <div className="oe-sec-head">
+                      <span className="oe-sec-name">{name}</span>
+                      <span className="oe-sec-total">{money(sub(groups[name]))}</span>
+                    </div>
+                    <ul className="oe-lines">
+                      {groups[name].map((r) => (
+                        <li key={r.code} className="oe-line">
+                          <code className="oe-code">{r.code}</code>
+                          <span className="oe-desc">{r.name || r.code}</span>
+                          <span className="oe-qty">{r.qty.toLocaleString()} {r.unit}</span>
+                          <span className="oe-rate">
+                            $<input
+                              className="rate-in" type="number" min="0" step="0.5"
+                              defaultValue={r.rate}
+                              onBlur={(e) => onRate(r.code, e.target.value)}
+                              onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                            />
+                          </span>
+                          <span className="oe-cost">{money(r.cost)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+                <div className="oe-grand">
+                  <span>GRAND TOTAL</span>
+                  <span>{money(pricing.total)}</span>
+                </div>
+                <p className="hint">
+                  Grouped like the Outdoor Elements scope of work. Edit any rate (Enter) —
+                  the line, section subtotal and grand total update. Quantities reflect Stage-2 edits.
+                </p>
+              </section>
+            );
+          })()}
         </section>
       )}
 

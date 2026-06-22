@@ -4,7 +4,6 @@ import shutil
 import tempfile
 
 import fitz
-import pytest
 
 from backend import db, store
 from backend.tasks import run_stage1_config
@@ -33,7 +32,7 @@ def _make_pdf(text: str) -> str:
     return tmp
 
 
-def test_run_stage1_config_writes_pool_scope(tmp_path, monkeypatch):
+def test_run_stage1_config_writes_pool_scope(monkeypatch):
     _fresh_db()
     job_id = "testjob01"
     # set up job dir and fake PDFs
@@ -70,3 +69,6 @@ def test_run_stage1_config_writes_pool_scope(tmp_path, monkeypatch):
     assert scope["area_sf"] == 1109
     assert scope["total_price"] == 549863.52
     assert len(scope["items"]) >= 1
+
+    # Clean up test job directory
+    shutil.rmtree(store.job_dir(job_id), ignore_errors=True)

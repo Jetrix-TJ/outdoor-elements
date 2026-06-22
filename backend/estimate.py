@@ -30,7 +30,7 @@ _SUBS = [
     ("Site Furnishings", re.compile(r"\b(furnish|bench|bollard|bike\s*rack|tree\s*grate|trash|"
                                     r"receptacle|light|sign|fixture|umbrella|table|chair)", re.I)),
     ("Pavers", re.compile(r"\b(paver|concrete|tile|stone|pavement|sidewalk|patio|step|stair|"
-                          r"deck|band|surface|coping)", re.I)),
+                          r"deck|band|surface)", re.I)),
 ]
 
 

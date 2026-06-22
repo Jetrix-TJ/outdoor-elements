@@ -291,10 +291,10 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
   background: var(--surface); color: var(--primary); border: 1px solid #dadce0;
   border-radius: 999px; padding: 6px 16px; cursor: pointer; font-weight: 500; font-size: 13px;
   transition: background var(--dur-fast) var(--ease), border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  display: inline-flex; align-items: center; gap: 6px;
 }
 .pagepick:hover { background: var(--surface-tint); box-shadow: var(--elev-1); }
 .pagepick.active { border-color: var(--primary); background: var(--surface-tint); }
-.pagepick { display: inline-flex; align-items: center; gap: 6px; }
 .pagepick .dot { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
 .pagepick .dot.done { background: var(--green); }
 .pagepick .dot.running, .pagepick .dot.queued { background: #f59e0b; animation: pulse 1s infinite; }

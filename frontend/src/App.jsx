@@ -148,6 +148,16 @@ export default function App({ onLogout }) {
     getEstimate(job.job_id).then(setEstimate).catch(() => {});
   }, [view, job]);
 
+  // Re-fetch estimate while on Stage 3 as late sheets finish extracting.
+  // Stops once all sheets are terminal (done or error).
+  useEffect(() => {
+    if (view !== "stage3" || !job?.job_id) return;
+    const vals = Object.values(s2statuses);
+    const allTerminal = vals.length > 0 && vals.every((s) => s === "done" || s === "error");
+    if (allTerminal) return;
+    getEstimate(job.job_id).then(setEstimate).catch(() => {});
+  }, [s2statuses, view, job]);
+
   async function onRate(code, val) {
     const n = parseFloat(val);
     if (!(n >= 0)) return;
@@ -275,7 +285,19 @@ export default function App({ onLogout }) {
         loadZones(idx);
       } catch (e) { setS2({ status: "error", error: e.message }); }
     } else {
-      setS2({ status: st === "error" ? "error" : "running" });
+      // Unknown status (e.g. re-entering a fully-extracted job before poll returns):
+      // do a read GET to check whether the result is already available.
+      try {
+        const s = await getStage2(job.job_id, idx);
+        if (s?.status === "done") {
+          setS2(s);
+          loadZones(idx);
+        } else {
+          setS2({ status: st === "error" ? "error" : "running" });
+        }
+      } catch {
+        setS2({ status: st === "error" ? "error" : "running" });
+      }
     }
   }
 
@@ -291,7 +313,6 @@ export default function App({ onLogout }) {
     setView("stage2");
     const first = job.pages.find((p) => p.keep);
     const firstIdx = first ? first.index : 0;
-    setS2page(firstIdx);
     startAllStage2(job.job_id).catch((e) => setError(e.message)); // batch in background
     selectPage(firstIdx); // show the first sheet (loads when its detection completes)
   }

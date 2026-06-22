@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   uploadPdf, pollJob, thumbUrl, previewUrl,
   startStage2, pollStage2, stage2OverlayUrl,
+  startAllStage2, getStage2Status,
   getConfig, editScale, getPricing, editRate, getEstimate,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
@@ -58,6 +59,7 @@ export default function App({ onLogout }) {
   const [view, setView] = useState("stage1");   // "stage1" | "stage2"
   const [s2, setS2] = useState(null);           // stage 2 status/result
   const [s2page, setS2page] = useState(null);   // page index being detected
+  const [s2statuses, setS2statuses] = useState({}); // { pageIndex: "pending|queued|running|done|error" }
   const [config, setConfig] = useState(null);   // Gemini auto-config (reviewable)
   const [editMode, setEditMode] = useState(false); // interactive select on the overlay
   const [pricing, setPricing] = useState(null);  // costed estimate for the page
@@ -189,6 +191,24 @@ export default function App({ onLogout }) {
     return () => { alive = false; };
   }, [job?.job_id, config]);
 
+  // While in Stage 2, poll batch status until every kept page is done/error.
+  useEffect(() => {
+    if (view !== "stage2" || !job?.job_id) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const { pages } = await getStage2Status(job.job_id);
+        if (!alive) return;
+        setS2statuses(pages || {});
+        const vals = Object.values(pages || {});
+        const pending = vals.some((s) => s === "pending" || s === "queued" || s === "running");
+        if (pending) setTimeout(tick, 1500);
+      } catch { if (alive) setTimeout(tick, 3000); }
+    };
+    tick();
+    return () => { alive = false; };
+  }, [view, job]);
+
   async function handleFile(files) {
     const list = Array.from(files && files.length !== undefined ? files : [files]).filter(Boolean);
     if (!list.length) return;
@@ -241,10 +261,16 @@ export default function App({ onLogout }) {
     }
   }
 
+  // minimal placeholder; replaced in Task 3
+  async function selectPage(idx) { setS2page(idx); }
+
   function goStage2() {
     setView("stage2");
     const first = job.pages.find((p) => p.keep);
-    runStage2(first ? first.index : 0);
+    const firstIdx = first ? first.index : 0;
+    setS2page(firstIdx);
+    startAllStage2(job.job_id).catch((e) => setError(e.message)); // batch in background
+    selectPage(firstIdx); // show the first sheet (loads when its detection completes)
   }
 
   const onDrop = (e) => {

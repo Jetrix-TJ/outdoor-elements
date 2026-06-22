@@ -180,8 +180,9 @@ export default function App({ onLogout }) {
     return () => { alive = false; };
   }, [job?.job_id, config]);
 
-  async function handleFile(file) {
-    if (!file) return;
+  async function handleFile(files) {
+    const list = Array.from(files && files.length !== undefined ? files : [files]).filter(Boolean);
+    if (!list.length) return;
     setError(null);
     setBusy(true);
     setJob(null);
@@ -189,7 +190,7 @@ export default function App({ onLogout }) {
     setS2(null);
     setConfig(null);
     try {
-      const up = await uploadPdf(file);
+      const up = await uploadPdf(list);
       setEager(up.eager);
       setResumed(!!up.resumed);
       await pollJob(up.job_id, (j) => setJob({ ...j, job_id: up.job_id }));
@@ -221,7 +222,7 @@ export default function App({ onLogout }) {
 
   const onDrop = (e) => {
     e.preventDefault();
-    handleFile(e.dataTransfer.files?.[0]);
+    handleFile(e.dataTransfer.files);
   };
 
   const kept = job?.pages?.filter((p) => p.keep) ?? [];
@@ -258,15 +259,16 @@ export default function App({ onLogout }) {
             ref={fileRef}
             type="file"
             accept="application/pdf"
+            multiple
             hidden
-            onChange={(e) => handleFile(e.target.files?.[0])}
+            onChange={(e) => handleFile(e.target.files)}
           />
           {busy ? (
             <p>Working…</p>
           ) : (
             <>
-              <p className="big">Drop the drawing PDF here</p>
-              <p className="muted">or click to browse · vector PDF, no AI needed for this step</p>
+              <p className="big">Drop the drawing PDF(s) here</p>
+              <p className="muted">or click to browse · one or more vector PDFs — merged into one set</p>
             </>
           )}
         </div>

@@ -77,36 +77,56 @@ def login(req: LoginReq) -> dict:
     raise HTTPException(status_code=401, detail="Incorrect passcode.")
 
 
-@app.post("/api/upload", response_model=UploadResponse)
-async def upload(background: BackgroundTasks, file: UploadFile = File(...)) -> UploadResponse:
-    if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Please upload a .pdf file.")
+def _merge_pdfs(blobs: list[bytes]) -> bytes:
+    """Concatenate several PDFs into one set (one job covers all the files)."""
+    import fitz
+    out = fitz.open()
+    for b in blobs:
+        src = fitz.open(stream=b, filetype="pdf")
+        out.insert_pdf(src)
+        src.close()
+    data = out.tobytes()
+    out.close()
+    return data
 
-    data = await file.read()
+
+@app.post("/api/upload", response_model=UploadResponse)
+async def upload(background: BackgroundTasks,
+                 files: list[UploadFile] = File(...)) -> UploadResponse:
+    pdfs = [f for f in files if (f.filename or "").lower().endswith(".pdf")]
+    if not pdfs:
+        raise HTTPException(status_code=400, detail="Please upload .pdf file(s).")
+
+    blobs = [await f.read() for f in pdfs]
+    # Multiple files = parts of one drawing set -> merge into a single set so page
+    # selection + extraction cover all of them.
+    data = blobs[0] if len(blobs) == 1 else _merge_pdfs(blobs)
+    filename = (pdfs[0].filename if len(pdfs) == 1
+                else f"{len(pdfs)} files ({pdfs[0].filename} +{len(pdfs) - 1})")
     content_hash = hashlib.sha256(data).hexdigest()
 
-    # Same PDF uploaded before? Resume that job so its saved edits/deletions and
+    # Same set uploaded before? Resume that job so its saved edits/deletions and
     # already-computed pages/zones come back instead of starting from scratch.
     existing = store.find_job_by_hash(content_hash)
     if existing and store.pdf_path(existing).exists():
         st = store.read_status(existing) or {}
         return UploadResponse(job_id=existing, eager=EAGER, resumed=True,
-                              filename=st.get("filename") or file.filename)
+                              filename=st.get("filename") or filename)
 
     job_id = store.new_job_id()
     store.pdf_path(job_id).write_bytes(data)
-    store.write_status(job_id, {"job_id": job_id, "filename": file.filename, "status": "queued"})
+    store.write_status(job_id, {"job_id": job_id, "filename": filename, "status": "queued"})
     store.set_content_hash(job_id, content_hash)
 
     # Dispatch Stage 1 (page selection) + Gemini auto-config WITHOUT blocking.
     # No Redis -> background threads; Redis up -> Celery workers.
     if EAGER:
-        background.add_task(run_stage1, job_id, file.filename)
-        background.add_task(run_stage1_config, job_id, file.filename)
+        background.add_task(run_stage1, job_id, filename)
+        background.add_task(run_stage1_config, job_id, filename)
     else:
-        stage1_select.delay(job_id, file.filename)
-        stage1_config.delay(job_id, file.filename)
-    return UploadResponse(job_id=job_id, filename=file.filename, eager=EAGER)
+        stage1_select.delay(job_id, filename)
+        stage1_config.delay(job_id, filename)
+    return UploadResponse(job_id=job_id, filename=filename, eager=EAGER)
 
 
 class ScaleEdit(BaseModel):

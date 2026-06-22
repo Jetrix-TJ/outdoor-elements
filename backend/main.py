@@ -601,10 +601,33 @@ async def get_upload_url(req: UploadUrlRequest) -> dict:
 
 @app.post("/api/jobs/{job_id}/start")
 async def start_job(job_id: str, background: BackgroundTasks, filename: str = "") -> dict:
-    """Kick off Stage 1 after a direct GCS upload has completed."""
+    """Kick off Stage 1 after a direct-to-GCS upload has completed.
+
+    The browser PUTs the PDF straight into the GCS jobs bucket, which is NOT the
+    container's local disk. So before processing we pull the blob down to the
+    local job path the pipeline reads from (store.pdf_path). If it's already
+    present (local dev, or a FUSE mount), we skip the download."""
     pdf = store.pdf_path(job_id)
-    if not pdf.exists():
-        raise HTTPException(status_code=404, detail="PDF not found — ensure the GCS upload completed.")
+    try:
+        have_local = pdf.exists()
+    except Exception:  # noqa: BLE001 — a mount glitch shouldn't crash the request
+        have_local = False
+
+    if not have_local:
+        try:
+            from google.cloud import storage as gcs
+            blob = gcs.Client().bucket(GCS_JOBS_BUCKET).blob(f"{job_id}/upload.pdf")
+            if not blob.exists():
+                raise HTTPException(status_code=404,
+                                    detail="PDF not found — ensure the GCS upload completed.")
+            pdf.parent.mkdir(parents=True, exist_ok=True)
+            blob.download_to_filename(str(pdf))
+        except HTTPException:
+            raise
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=500,
+                                detail=f"Could not fetch the uploaded PDF from storage: {exc}")
+
     store.write_status(job_id, {"job_id": job_id, "filename": filename, "status": "queued"})
     if EAGER:
         background.add_task(run_stage1, job_id, filename)

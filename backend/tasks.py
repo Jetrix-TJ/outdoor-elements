@@ -16,15 +16,15 @@ from .stage2 import legend_comparison
 
 
 def _is_pool_plan(page) -> bool:
-    """True only for pool/spa SURFACE PLAN sheets — not piping, equipment, or detail sheets."""
-    t = page.get_text().upper()
-    if not (("POOL" in t or "SPA" in t or "AQUATIC" in t) and "PLAN" in t):
-        return False
-    # Exclude infrastructure/detail sheets — but match against THIS sheet's TITLE
-    # BLOCK, not the whole page. The drawing index lists other sheets ("POOL
-    # DETAILS", "PIPING PLAN", …) which would otherwise falsely exclude a real
-    # Pool & Spa plan (e.g. AQ0.0 "POOL & SPA REFERENCE PLAN").
+    """True only for pool/spa SURFACE PLAN sheets, judged by the sheet's own
+    TITLE BLOCK. Using the title (not the whole page text) means:
+      • a landscape/planting/hardscape plan that merely mentions a pool courtyard
+        (e.g. LP101 'PLANTING PLAN') is NOT mis-routed to pool mode, and
+      • the drawing index listing other sheets ('POOL DETAILS', 'PIPING PLAN')
+        doesn't falsely exclude a real 'POOL & SPA' plan (e.g. Kirby AQ0.0)."""
     title = (selection._corner_title(page) or "").upper()
+    if not ("POOL" in title or "SPA" in title or "AQUATIC" in title):
+        return False
     EXCLUDE = ("PIPING PLAN", "EQUIPMENT PLAN", "EQUIPMENT ROOM", "RETURN PIPING",
                "SUPPLY PIPING", "POOL SECTION", "SPA SECTION", "HYDRO THERAPY",
                "HYDROTHERA", "POOL DETAILS", "SPA DETAILS", "POOL DETAIL",

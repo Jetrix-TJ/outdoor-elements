@@ -90,6 +90,17 @@ export async function getJob(jobId) {
   return res.json();
 }
 
+// Manually include/exclude a page from the takeoff set. Returns updated job status.
+export async function setPageKeep(jobId, index, keep) {
+  const res = await fetch(`/api/jobs/${jobId}/pages/${index}/keep`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keep }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Could not update page");
+  return res.json();
+}
+
 export function thumbUrl(jobId, thumb) {
   // thumb is like "thumbs/p2.png"
   return `/api/jobs/${jobId}/${thumb}`;

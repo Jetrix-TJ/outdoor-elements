@@ -804,3 +804,15 @@ button.ghost:disabled { opacity: .4; cursor: not-allowed; }
   border-color: var(--accent); box-shadow: 0 0 0 3px rgba(66,133,244,.18);
 }
 .stepper .stp-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: 8px; }
+
+/* Stage 1 manual page include/exclude */
+.card.keep { position: relative; }
+.page-toggle {
+  font: inherit; cursor: pointer; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); line-height: 1;
+}
+.page-toggle.include {
+  padding: 1px 8px; font-size: 12px; margin-right: 4px;
+  color: var(--accent); border-color: #aecbfa;
+}
+.page-toggle.include:hover { background: var(--accent); color: #fff; border-color: var(--accent); }

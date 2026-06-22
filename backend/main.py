@@ -212,6 +212,38 @@ def job_status(job_id: str) -> JobStatus:
     return JobStatus(**data)
 
 
+class KeepEdit(BaseModel):
+    keep: bool
+
+
+@app.patch("/api/jobs/{job_id}/pages/{index}/keep")
+def set_page_keep(job_id: str, index: int, edit: KeepEdit) -> JobStatus:
+    """Manually include/exclude a page from the takeoff set (the reviewable
+    page-selection step). Lets the estimator land on exactly the right sheets
+    when the auto-classifier keeps too many or misses one."""
+    from . import selection
+    data = store.read_status(job_id)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Unknown job id.")
+    pages = data.get("pages", [])
+    target = next((p for p in pages if int(p.get("index", -1)) == index), None)
+    if target is None:
+        raise HTTPException(status_code=404, detail="Unknown page index.")
+    target["keep"] = bool(edit.keep)
+    target["pool_style"] = False  # a manual pick is no longer "pool-style/unsorted"
+    # Render a thumbnail for a newly-included page so the kept grid shows it.
+    if target["keep"] and not target.get("thumb"):
+        out = store.thumbs_dir(job_id) / f"p{index}.png"
+        try:
+            selection.render_thumb(str(store.pdf_path(job_id)), index, out)
+            target["thumb"] = f"thumbs/p{index}.png"
+        except Exception:  # noqa: BLE001 — thumb is best-effort
+            pass
+    data["kept_count"] = sum(1 for p in pages if p.get("keep"))
+    store.write_status(job_id, data)
+    return JobStatus(**data)
+
+
 @app.get("/api/jobs/{job_id}/thumbs/{name}")
 def thumb(job_id: str, name: str) -> FileResponse:
     path = store.thumbs_dir(job_id) / name

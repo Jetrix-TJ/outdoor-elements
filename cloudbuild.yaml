@@ -39,6 +39,13 @@ steps:
       # Long requests (large uploads, slow Gemini calls) aren't cut short.
       - --timeout
       - '3600'
+      # Persist job files (PDFs, thumbnails, overlays, masks) on the GCS jobs
+      # bucket via a FUSE volume — Cloud Run's local disk is ephemeral and not
+      # shared across instances, so without this the app "works locally but not
+      # deployed": pages/thumbnails/overlays vanish after upload. Mount path
+      # matches store.JOBS_DIR (/app/backend/jobs).
+      - --add-volume=name=jobs,type=cloud-storage,bucket=outdoor-elements-499605-jobs
+      - --add-volume-mount=volume=jobs,mount-path=/app/backend/jobs
       - --quiet
 
 images:

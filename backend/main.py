@@ -542,14 +542,18 @@ async def get_upload_url(req: UploadUrlRequest) -> dict:
     if not req.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a .pdf file.")
     try:
+        # Create the GCS client/session FIRST — if GCS is unavailable (e.g. local
+        # dev), fail before writing any job status so we don't orphan a "queued"
+        # job. The frontend then falls back to the multipart /api/upload path.
         from google.cloud import storage as gcs
+        client = gcs.Client()
         job_id = store.new_job_id()
-        store.write_status(job_id, {"job_id": job_id, "filename": req.filename, "status": "queued"})
-        blob = gcs.Client().bucket(GCS_JOBS_BUCKET).blob(f"{job_id}/upload.pdf")
+        blob = client.bucket(GCS_JOBS_BUCKET).blob(f"{job_id}/upload.pdf")
         upload_url = blob.create_resumable_upload_session(
             content_type="application/pdf",
             size=req.size,
         )
+        store.write_status(job_id, {"job_id": job_id, "filename": req.filename, "status": "queued"})
         return {"job_id": job_id, "upload_url": upload_url}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Could not create upload URL: {exc}")

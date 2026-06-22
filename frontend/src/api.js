@@ -19,51 +19,61 @@ async function _jsonOrText(res) {
   return ct.includes("json") ? res.json().catch(() => ({})) : { detail: await res.text() };
 }
 
+// Direct-to-GCS resumable upload for a single large file (prod path). Throws if
+// GCS isn't reachable (e.g. local dev with no bucket/credentials).
+async function _directGcsUpload(file) {
+  const urlRes = await fetch("/api/upload-url", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ filename: file.name, size: file.size }),
+  });
+  if (!urlRes.ok) {
+    const body = await _jsonOrText(urlRes);
+    throw new Error(body.detail || "Could not get upload URL");
+  }
+  const { job_id, upload_url } = await urlRes.json();
+
+  // PUT the file directly to GCS (no Cloud Run hop). GCS omits
+  // Access-Control-Allow-Origin on the 200 PUT, so the browser CORS check throws
+  // TypeError even though the file landed — swallow it; /start verifies existence.
+  try {
+    const putRes = await fetch(upload_url, {
+      method: "PUT",
+      headers: { "Content-Type": "application/pdf" },
+      body: file,
+    });
+    if (!putRes.ok) throw new Error(`GCS upload failed (${putRes.status})`);
+  } catch (err) {
+    if (!(err instanceof TypeError)) throw err;
+  }
+
+  const startRes = await fetch(
+    `/api/jobs/${job_id}/start?filename=${encodeURIComponent(file.name)}`,
+    { method: "POST" }
+  );
+  if (!startRes.ok) {
+    const body = await _jsonOrText(startRes);
+    throw new Error(body.detail || "Could not start processing");
+  }
+  return startRes.json();
+}
+
 export async function uploadPdf(files) {
   // accepts a single File or a FileList/array — merged into one set server-side
   const list = files && files.length !== undefined ? Array.from(files) : [files];
 
-  // Single large file → direct-to-GCS resumable upload (bypasses Cloud Run 32 MB limit)
+  // Single large file → try direct-to-GCS (bypasses Cloud Run's 32 MB limit in
+  // prod). If GCS isn't configured (local dev), fall back to the multipart path
+  // below — uvicorn has no body-size limit, so large files upload fine locally.
   if (list.length === 1 && list[0].size > DIRECT_UPLOAD_THRESHOLD) {
-    const file = list[0];
-    const urlRes = await fetch("/api/upload-url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: file.name, size: file.size }),
-    });
-    if (!urlRes.ok) {
-      const body = await _jsonOrText(urlRes);
-      throw new Error(body.detail || "Could not get upload URL");
-    }
-    const { job_id, upload_url } = await urlRes.json();
-
-    // PUT the file directly to GCS (no Cloud Run hop).
-    // GCS omits Access-Control-Allow-Origin on the 200 PUT response, so the
-    // browser CORS check throws TypeError even though the file landed.
-    // Swallow it and let /start verify via blob.exists().
     try {
-      const putRes = await fetch(upload_url, {
-        method: "PUT",
-        headers: { "Content-Type": "application/pdf" },
-        body: file,
-      });
-      if (!putRes.ok) throw new Error(`GCS upload failed (${putRes.status})`);
+      return await _directGcsUpload(list[0]);
     } catch (err) {
-      if (!(err instanceof TypeError)) throw err;
+      console.warn("Direct GCS upload unavailable — falling back to multipart:", err.message);
     }
-
-    const startRes = await fetch(
-      `/api/jobs/${job_id}/start?filename=${encodeURIComponent(file.name)}`,
-      { method: "POST" }
-    );
-    if (!startRes.ok) {
-      const body = await _jsonOrText(startRes);
-      throw new Error(body.detail || "Could not start processing");
-    }
-    return startRes.json();
   }
 
-  // Small files (or multiple files) — standard multipart upload through Cloud Run
+  // Small files, multiple files, or GCS fallback — standard multipart upload.
   const form = new FormData();
   for (const f of list) form.append("files", f);
   const res = await fetch("/api/upload", { method: "POST", body: form });

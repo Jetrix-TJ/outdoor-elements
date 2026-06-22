@@ -626,16 +626,18 @@ export default function App({ onLogout }) {
             const money = (v) => `$${Math.round(v).toLocaleString()}`;
             const line = (r) => (
               <li key={r.code} className="oe-line">
-                <code className="oe-code">{r.code}</code>
-                <span className="oe-desc">{r.name || r.code}</span>
-                <span className="oe-qty">{r.qty.toLocaleString()} {r.unit}</span>
-                <span className="oe-rate">
-                  $<input
-                    className="rate-in" type="number" min="0" step="0.5"
-                    defaultValue={r.rate}
-                    onBlur={(e) => onRate(r.code, e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                  />
+                <span className="oe-line-main">
+                  <code className="oe-code">{r.code}</code>
+                  <span className="oe-desc">{r.name || r.code}</span>
+                  <span className="oe-meta">
+                    {r.qty.toLocaleString()} {r.unit} @ $
+                    <input
+                      className="rate-in" type="number" min="0" step="0.5"
+                      defaultValue={r.rate}
+                      onBlur={(e) => onRate(r.code, e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                    />
+                  </span>
                 </span>
                 <span className="oe-cost">{money(r.cost)}</span>
               </li>

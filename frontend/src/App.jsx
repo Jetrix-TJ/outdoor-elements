@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
   uploadPdf, pollJob, thumbUrl, previewUrl,
-  startStage2, pollStage2, stage2OverlayUrl,
+  startStage2, pollStage2, stage2OverlayUrl, qtoUrl,
   getConfig, editScale, getPricing, editRate,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
@@ -571,6 +571,9 @@ export default function App({ onLogout }) {
           {s2?.status === "done" && (
             <div className="actions">
               <button className="secondary" onClick={() => setView("stage1")}>← Pages</button>
+              <button className="secondary" onClick={() => window.open(qtoUrl(job.job_id, s2page), "_blank")}>
+                <span className="material-symbols-outlined">description</span> Generate QTO output
+              </button>
               <button className="primary" onClick={() => setView("stage3")}>
                 Continue → Stage 3 (measure &amp; compare)
               </button>

@@ -219,6 +219,17 @@ def stage2_overlay(job_id: str, page: int) -> FileResponse:
     return FileResponse(path, media_type="image/png")
 
 
+@app.get("/api/jobs/{job_id}/stage2/{page}/qto")
+def stage2_qto(job_id: str, page: int) -> FileResponse:
+    """Render a human-style QTO output: the colored plan + a takeoff legend."""
+    if store.read_stage2(job_id, page) is None:
+        raise HTTPException(status_code=404, detail="Run Stage 2 first.")
+    from . import qto_output
+    path = qto_output.render_qto(job_id, page)
+    return FileResponse(path, media_type="image/png",
+                        filename=f"QTO_{job_id}_p{page}.png")
+
+
 # ---------- Manual correction: remove a shaded zone by click ----------
 class RemovePoint(BaseModel):
     x: float  # fractional 0..1 of the overlay width

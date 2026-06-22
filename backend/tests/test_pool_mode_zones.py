@@ -1,8 +1,5 @@
 """Test that detect_pool returns zone geometry and uses shared renderer."""
-import tempfile, os, shutil
-import numpy as np
 import fitz
-import pytest
 
 
 def _make_pool_pdf(out_path: str, pool_rect, spa_rect, page_size=(612, 792)):
@@ -37,6 +34,9 @@ def test_detect_pool_returns_zones(tmp_path):
         assert "geometry" in z and len(z["geometry"]) > 0
         assert "area_sqft" in z
         assert "source" in z and z["source"] == "pool"
+        assert "perimeter_lf" in z
+        assert "bbox" in z and len(z["bbox"]) == 4
+        assert z["status"] == "active"
 
 
 def test_detect_pool_overlay_exists(tmp_path):

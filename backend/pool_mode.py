@@ -28,7 +28,7 @@ _SURFACE_COLOR = {
     "TANNING LEDGE": (255, 193, 7),  # amber
     "STONE STEPPERS": (121, 85, 72),
 }
-_DEFAULT_COLOR = (33, 150, 243)
+_DEFAULT_COLOR = (158, 158, 158)
 
 
 def detect_pool(pdf_path, page_idx, targets: dict, out_png, dpi: int = 150,
@@ -119,6 +119,13 @@ def detect_pool(pdf_path, page_idx, targets: dict, out_png, dpi: int = 150,
             "perimeter_lf": perim_lf,
             "target_sf": float(targets[name]),
         })
+
+        if not polys:
+            # fallback: bounding-box rectangle in PDF points
+            polys = [[[int(x * pt_scale), int(y_top * pt_scale)],
+                       [int((x + cw) * pt_scale), int(y_top * pt_scale)],
+                       [int((x + cw) * pt_scale), int((y_top + ch) * pt_scale)],
+                       [int(x * pt_scale), int((y_top + ch) * pt_scale)]]]
 
         if polys:
             zone_list.append({

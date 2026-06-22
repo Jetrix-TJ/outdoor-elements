@@ -23,7 +23,7 @@ from . import db, estimate_pricing, pricing, store
 from .celery_app import EAGER
 from .schemas import JobStatus, UploadResponse
 from .tasks import (run_stage1, run_stage1_config, run_stage2, stage1_config,
-                    stage1_select, stage2_detect)
+                    stage1_select, stage2_detect, detect_kept_pages, stage2_detect_all)
 
 app = FastAPI(title="Outdoor Elements — Takeoff (Stage 1)")
 
@@ -84,36 +84,56 @@ def login(req: LoginReq) -> dict:
     raise HTTPException(status_code=401, detail="Incorrect passcode.")
 
 
-@app.post("/api/upload", response_model=UploadResponse)
-async def upload(background: BackgroundTasks, file: UploadFile = File(...)) -> UploadResponse:
-    if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Please upload a .pdf file.")
+def _merge_pdfs(blobs: list[bytes]) -> bytes:
+    """Concatenate several PDFs into one set (one job covers all the files)."""
+    import fitz
+    out = fitz.open()
+    for b in blobs:
+        src = fitz.open(stream=b, filetype="pdf")
+        out.insert_pdf(src)
+        src.close()
+    data = out.tobytes()
+    out.close()
+    return data
 
-    data = await file.read()
+
+@app.post("/api/upload", response_model=UploadResponse)
+async def upload(background: BackgroundTasks,
+                 files: list[UploadFile] = File(...)) -> UploadResponse:
+    pdfs = [f for f in files if (f.filename or "").lower().endswith(".pdf")]
+    if not pdfs:
+        raise HTTPException(status_code=400, detail="Please upload .pdf file(s).")
+
+    blobs = [await f.read() for f in pdfs]
+    # Multiple files = parts of one drawing set -> merge into a single set so page
+    # selection + extraction cover all of them.
+    data = blobs[0] if len(blobs) == 1 else _merge_pdfs(blobs)
+    filename = (pdfs[0].filename if len(pdfs) == 1
+                else f"{len(pdfs)} files ({pdfs[0].filename} +{len(pdfs) - 1})")
     content_hash = hashlib.sha256(data).hexdigest()
 
-    # Same PDF uploaded before? Resume that job so its saved edits/deletions and
+    # Same set uploaded before? Resume that job so its saved edits/deletions and
     # already-computed pages/zones come back instead of starting from scratch.
     existing = store.find_job_by_hash(content_hash)
     if existing and store.pdf_path(existing).exists():
         st = store.read_status(existing) or {}
         return UploadResponse(job_id=existing, eager=EAGER, resumed=True,
-                              filename=st.get("filename") or file.filename)
+                              filename=st.get("filename") or filename)
 
     job_id = store.new_job_id()
     store.pdf_path(job_id).write_bytes(data)
-    store.write_status(job_id, {"job_id": job_id, "filename": file.filename, "status": "queued"})
+    store.write_status(job_id, {"job_id": job_id, "filename": filename, "status": "queued"})
     store.set_content_hash(job_id, content_hash)
 
     # Dispatch Stage 1 (page selection) + Gemini auto-config WITHOUT blocking.
     # No Redis -> background threads; Redis up -> Celery workers.
     if EAGER:
-        background.add_task(run_stage1, job_id, file.filename)
-        background.add_task(run_stage1_config, job_id, file.filename)
+        background.add_task(run_stage1, job_id, filename)
+        background.add_task(run_stage1_config, job_id, filename)
     else:
-        stage1_select.delay(job_id, file.filename)
-        stage1_config.delay(job_id, file.filename)
-    return UploadResponse(job_id=job_id, filename=file.filename, eager=EAGER)
+        stage1_select.delay(job_id, filename)
+        stage1_config.delay(job_id, filename)
+    return UploadResponse(job_id=job_id, filename=filename, eager=EAGER)
 
 
 class ScaleEdit(BaseModel):
@@ -234,6 +254,38 @@ def start_stage2(job_id: str, page: int, background: BackgroundTasks,
     return {"job_id": job_id, "page": page, "eager": EAGER}
 
 
+@app.post("/api/jobs/{job_id}/stage2/all")
+def start_stage2_all(job_id: str, background: BackgroundTasks) -> dict:
+    """Kick off detection of EVERY kept page (sequential, background)."""
+    if not store.pdf_path(job_id).exists():
+        raise HTTPException(status_code=404, detail="Unknown job id.")
+    status = store.read_status(job_id) or {}
+    kept = [p for p in status.get("pages", []) if p.get("keep")]
+    # mark not-yet-started kept pages as queued so the UI shows them pending now
+    for p in kept:
+        if store.read_stage2(job_id, int(p["index"])) is None:
+            store.write_stage2(job_id, int(p["index"]),
+                               {"job_id": job_id, "page": int(p["index"]), "status": "queued"})
+    if EAGER:
+        background.add_task(detect_kept_pages, job_id)
+    else:
+        stage2_detect_all.delay(job_id)
+    return {"ok": True, "pages": len(kept)}
+
+
+@app.get("/api/jobs/{job_id}/stage2/status")
+def stage2_status_all(job_id: str) -> dict:
+    """Status of every kept page: pending|queued|running|done|error."""
+    status = store.read_status(job_id) or {}
+    pages: dict[str, str] = {}
+    for p in status.get("pages", []):
+        if not p.get("keep"):
+            continue
+        s2 = store.read_stage2(job_id, int(p["index"]))
+        pages[str(int(p["index"]))] = (s2 or {}).get("status", "pending")
+    return {"pages": pages}
+
+
 @app.get("/api/jobs/{job_id}/stage2/{page}")
 def stage2_status(job_id: str, page: int) -> dict:
     data = store.read_stage2(job_id, page)
@@ -248,6 +300,17 @@ def stage2_overlay(job_id: str, page: int) -> FileResponse:
     if not path.exists():
         raise HTTPException(status_code=404, detail="Overlay not ready.")
     return FileResponse(path, media_type="image/png")
+
+
+@app.get("/api/jobs/{job_id}/stage2/{page}/qto")
+def stage2_qto(job_id: str, page: int) -> FileResponse:
+    """Render a human-style QTO output: the colored plan + a takeoff legend."""
+    if store.read_stage2(job_id, page) is None:
+        raise HTTPException(status_code=404, detail="Run Stage 2 first.")
+    from . import qto_output
+    path = qto_output.render_qto(job_id, page)
+    return FileResponse(path, media_type="image/png",
+                        filename=f"QTO_{job_id}_p{page}.png")
 
 
 # ---------- Manual correction: remove a shaded zone by click ----------
@@ -412,6 +475,13 @@ def _pricing_for(job_id: str, page: int) -> dict:
 @app.get("/api/jobs/{job_id}/pricing")
 def get_pricing(job_id: str, page: int) -> dict:
     return _pricing_for(job_id, page)
+
+
+@app.get("/api/jobs/{job_id}/estimate")
+def get_estimate(job_id: str) -> dict:
+    """Combined project estimate (all detected pages) in OE scope-of-work format."""
+    from . import estimate
+    return estimate.build_estimate(job_id)
 
 
 @app.patch("/api/jobs/{job_id}/pricing")

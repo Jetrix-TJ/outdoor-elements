@@ -186,7 +186,7 @@ def _has_material_tags(pdf, page: int, cfg: dict) -> bool:
     return len(tags) >= 2
 
 
-def _compute_takeoff(pdf, page: int, groups: list, scale: float) -> list:
+def _compute_takeoff(job_id, pdf, page: int, groups: list, scale: float) -> list:
     """Area + linear + count takeoff for the page. Reuses the engine's area totals
     and vision-reads the legend for the linear/count split (walls, trees, etc.).
     Best-effort: never let the takeoff extras break Stage 2."""
@@ -194,10 +194,36 @@ def _compute_takeoff(pdf, page: int, groups: list, scale: float) -> list:
         from . import takeoff
         area_by_code = {g["label"]: g.get("sqft", 0.0)
                         for g in (groups or []) if g.get("label")}
-        return takeoff.build_takeoff(str(pdf), page, use_vision=True,
-                                     scale_in_per_ft=scale, areas=area_by_code)
+        items = takeoff.build_takeoff(str(pdf), page, use_vision=True,
+                                      scale_in_per_ft=scale, areas=area_by_code)
     except Exception:  # noqa: BLE001
-        return []
+        items = []
+    # Visual counts via gemini-3.1-pro-preview: trees/pools/spas the geometric
+    # engine can't count. A page dense with trees is a PLANTING plan -> read the
+    # schedule and produce per-species counts instead of the generic "Trees" row.
+    try:
+        from . import visual_detect, planting
+        # Planting plan? Gate on the plant schedule + plant labels on this page
+        # (deterministic) — per-species counts. Else generic trees/pools/spas.
+        prows = []
+        sp = planting.find_schedule_page(str(pdf))
+        if sp is not None:
+            sched = planting.read_schedule(str(pdf), sp)
+            prows = planting.page_count_rows(str(pdf), page, sched)
+        if prows:
+            items = items + prows
+            # color the plants on the overlay automatically (during extraction)
+            try:
+                out = store.stage2_dir(job_id) / f"overlay_p{page}.png"
+                planting.render_planting_overlay(str(pdf), page, sched, str(out))
+            except Exception:  # noqa: BLE001
+                pass
+        else:
+            rows, _anns = visual_detect.count_takeoff_rows(str(pdf), page)
+            items = items + rows
+    except Exception:  # noqa: BLE001
+        pass
+    return items
 
 
 @shared_task(name="stage2_detect")
@@ -207,12 +233,12 @@ def stage2_detect(job_id: str, page: int, force: bool = False) -> dict:
 
 
 def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
-    # Resume-safe: never re-detect over an already-completed page unless forced —
-    # re-detection re-seeds the zones table and would wipe the user's edits. The
-    # saved result already reflects every edit (each edit re-renders it).
+    # Resume-safe: never re-detect a page that's already done OR currently being
+    # detected (queued/running) unless forced — prevents the batch and a manual
+    # trigger racing on the same page.
     if not force:
         existing = store.read_stage2(job_id, page)
-        if existing and existing.get("status") == "done":
+        if existing and existing.get("status") in ("done", "running", "queued"):
             return existing
     pdf = store.pdf_path(job_id)
     status = {"job_id": job_id, "page": page, "status": "running"}
@@ -279,7 +305,7 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
                 comparison=legend_comparison(_open_page(pdf, page), groups),
                 validation=_build_validation(sid, res["areas"]),
             )
-            status["takeoff"] = _compute_takeoff(pdf, page, groups, res["scale_in_per_ft"])
+            status["takeoff"] = _compute_takeoff(job_id, pdf, page, groups, res["scale_in_per_ft"])
         else:
             # Fallback: existing color-grouping / label-seeding
             res = stage2.detect_color_regions(pdf, page, out)
@@ -292,12 +318,36 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
         # area+linear+count takeoff so walls/trees/counts show too.
         if status.get("status") == "done" and "takeoff" not in status:
             status["takeoff"] = _compute_takeoff(
-                pdf, page, status.get("groups", []),
+                job_id, pdf, page, status.get("groups", []),
                 status.get("scale_in_per_ft", 1.0 / 16))
     except Exception as exc:  # noqa: BLE001
         status.update(status="error", error=f"{type(exc).__name__}: {exc}")
     store.write_stage2(job_id, page, status)
     return status
+
+
+@shared_task(name="stage2_detect_all")
+def stage2_detect_all(job_id: str) -> dict:
+    """Celery entry point for batch detection of every kept page."""
+    return detect_kept_pages(job_id)
+
+
+def detect_kept_pages(job_id: str) -> dict:
+    """Detect every KEPT page of the job, sequentially. Resume-safe: run_stage2
+    returns the saved result for an already-done page, so re-runs are cheap."""
+    status = store.read_status(job_id) or {}
+    detected = skipped = 0
+    for p in status.get("pages", []):
+        if not p.get("keep"):
+            continue
+        page = int(p["index"])
+        before = store.read_stage2(job_id, page)
+        if before and before.get("status") == "done":
+            skipped += 1
+            continue
+        run_stage2(job_id, page)
+        detected += 1
+    return {"detected": detected, "skipped": skipped}
 
 
 def _open_page(pdf_path, page: int):

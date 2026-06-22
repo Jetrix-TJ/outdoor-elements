@@ -19,49 +19,59 @@ async function _jsonOrText(res) {
   return ct.includes("json") ? res.json().catch(() => ({})) : { detail: await res.text() };
 }
 
-export async function uploadPdf(file) {
-  // Small files — standard multipart upload through Cloud Run
-  if (file.size <= DIRECT_UPLOAD_THRESHOLD) {
-    const form = new FormData();
-    form.append("file", file);
-    const res = await fetch("/api/upload", { method: "POST", body: form });
-    if (!res.ok) {
-      const body = await _jsonOrText(res);
-      throw new Error(body.detail || `Upload failed (${res.status})`);
+export async function uploadPdf(files) {
+  // accepts a single File or a FileList/array — merged into one set server-side
+  const list = files && files.length !== undefined ? Array.from(files) : [files];
+
+  // Single large file → direct-to-GCS resumable upload (bypasses Cloud Run 32 MB limit)
+  if (list.length === 1 && list[0].size > DIRECT_UPLOAD_THRESHOLD) {
+    const file = list[0];
+    const urlRes = await fetch("/api/upload-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: file.name, size: file.size }),
+    });
+    if (!urlRes.ok) {
+      const body = await _jsonOrText(urlRes);
+      throw new Error(body.detail || "Could not get upload URL");
     }
-    return res.json();
+    const { job_id, upload_url } = await urlRes.json();
+
+    // PUT the file directly to GCS (no Cloud Run hop).
+    // GCS omits Access-Control-Allow-Origin on the 200 PUT response, so the
+    // browser CORS check throws TypeError even though the file landed.
+    // Swallow it and let /start verify via blob.exists().
+    try {
+      const putRes = await fetch(upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/pdf" },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error(`GCS upload failed (${putRes.status})`);
+    } catch (err) {
+      if (!(err instanceof TypeError)) throw err;
+    }
+
+    const startRes = await fetch(
+      `/api/jobs/${job_id}/start?filename=${encodeURIComponent(file.name)}`,
+      { method: "POST" }
+    );
+    if (!startRes.ok) {
+      const body = await _jsonOrText(startRes);
+      throw new Error(body.detail || "Could not start processing");
+    }
+    return startRes.json();
   }
 
-  // Large files — direct-to-GCS resumable upload (bypasses Cloud Run size limit)
-  const urlRes = await fetch("/api/upload-url", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ filename: file.name, size: file.size }),
-  });
-  if (!urlRes.ok) {
-    const body = await _jsonOrText(urlRes);
-    throw new Error(body.detail || "Could not get upload URL");
+  // Small files (or multiple files) — standard multipart upload through Cloud Run
+  const form = new FormData();
+  for (const f of list) form.append("files", f);
+  const res = await fetch("/api/upload", { method: "POST", body: form });
+  if (!res.ok) {
+    const body = await _jsonOrText(res);
+    throw new Error(body.detail || "Upload failed");
   }
-  const { job_id, upload_url } = await urlRes.json();
-
-  // PUT the file directly to GCS (no Cloud Run hop)
-  const putRes = await fetch(upload_url, {
-    method: "PUT",
-    headers: { "Content-Type": "application/pdf" },
-    body: file,
-  });
-  if (!putRes.ok) throw new Error(`GCS upload failed (${putRes.status})`);
-
-  // Tell the backend to start Stage 1 processing
-  const startRes = await fetch(
-    `/api/jobs/${job_id}/start?filename=${encodeURIComponent(file.name)}`,
-    { method: "POST" }
-  );
-  if (!startRes.ok) {
-    const body = await _jsonOrText(startRes);
-    throw new Error(body.detail || "Could not start processing");
-  }
-  return startRes.json();
+  return res.json();
 }
 
 export async function getJob(jobId) {
@@ -116,6 +126,20 @@ export async function startStage2(jobId, page) {
 
 export async function getStage2(jobId, page) {
   const res = await fetch(`/api/jobs/${jobId}/stage2/${page}`);
+  if (!res.ok) throw new Error("Could not load Stage 2 status");
+  return res.json();
+}
+
+// Kick off detection of ALL kept pages (batch, background).
+export async function startAllStage2(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/stage2/all`, { method: "POST" });
+  if (!res.ok) throw new Error("Could not start batch extraction");
+  return res.json();
+}
+
+// Status of every kept page: { pages: { "<index>": "pending|queued|running|done|error" } }
+export async function getStage2Status(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/stage2/status`);
   if (!res.ok) throw new Error("Could not load Stage 2 status");
   return res.json();
 }
@@ -191,6 +215,13 @@ export async function editRate(jobId, page, code, rate) {
     body: JSON.stringify({ code, rate }),
   });
   if (!res.ok) throw new Error("Could not update rate");
+  return res.json();
+}
+
+// Combined project estimate (all detected pages) in OE scope-of-work format.
+export async function getEstimate(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/estimate`);
+  if (!res.ok) throw new Error("Could not load estimate");
   return res.json();
 }
 

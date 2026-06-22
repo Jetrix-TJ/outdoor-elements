@@ -430,14 +430,23 @@ def detect_zones(binary, tags, pt_to_px, dpi, scale_in_per_ft=1 / 16,
 
 
 # ── per-sheet orchestrator ──────────────────────────────────────────────────
-def run_sheet(pdf_path, page_idx, sheet_cfg: dict, out_png, dpi: int = 150) -> dict:
+def run_sheet(pdf_path, page_idx, sheet_cfg: dict, out_png, dpi: int = 150,
+              tags_override: list[dict] | None = None) -> dict:
     """Full takeoff for one sheet using a per-sheet config. Returns
-    {areas{code->sqft}, overlay(filename), tags(int), scale_in_per_ft}."""
+    {areas{code->sqft}, overlay(filename), tags(int), scale_in_per_ft}.
+
+    tags_override: when given, use these tag positions ({code, x, y} in PDF
+    points) instead of geometric label extraction — e.g. Gemini's ARROW-TARGET
+    points, so each zone is claimed where the leader arrow POINTS (Phase 2)
+    rather than at the label (which lands on the wrong region)."""
     scale = float(sheet_cfg["scale_in_per_ft"])
     tag_re = re.compile(sheet_cfg["tag_pattern"], re.I)
     clip = sheet_cfg.get("clip", {"top": 0.05, "bottom": 0.92, "left": 0.0, "right": 0.80})
 
-    tags = extract_tags(pdf_path, page_idx, clip, tag_re, sheet_cfg.get("tag_numeric_only", True))
+    if tags_override is not None:
+        tags = [dict(t) for t in tags_override]
+    else:
+        tags = extract_tags(pdf_path, page_idx, clip, tag_re, sheet_cfg.get("tag_numeric_only", True))
     uniq: list[dict] = []
     for t in tags:
         if not any(u["code"] == t["code"] and abs(u["x"] - t["x"]) < 10 and abs(u["y"] - t["y"]) < 10

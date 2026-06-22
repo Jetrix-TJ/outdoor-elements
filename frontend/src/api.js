@@ -77,6 +77,20 @@ export async function getStage2(jobId, page) {
   return res.json();
 }
 
+// Kick off detection of ALL kept pages (batch, background).
+export async function startAllStage2(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/stage2/all`, { method: "POST" });
+  if (!res.ok) throw new Error("Could not start batch extraction");
+  return res.json();
+}
+
+// Status of every kept page: { pages: { "<index>": "pending|queued|running|done|error" } }
+export async function getStage2Status(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/stage2/status`);
+  if (!res.ok) throw new Error("Could not load Stage 2 status");
+  return res.json();
+}
+
 export function stage2OverlayUrl(jobId, page) {
   return `/api/jobs/${jobId}/stage2/${page}/overlay`;
 }

@@ -30,7 +30,7 @@ _SUBS = [
     ("Site Furnishings", re.compile(r"\b(furnish|bench|bollard|bike\s*rack|tree\s*grate|trash|"
                                     r"receptacle|light|sign|fixture|umbrella|table|chair)", re.I)),
     ("Pavers", re.compile(r"\b(paver|concrete|tile|stone|pavement|sidewalk|patio|step|stair|"
-                          r"deck|band|surface|coping)", re.I)),
+                          r"deck|band|surface)", re.I)),
 ]
 
 
@@ -60,11 +60,22 @@ def _job_rate_table(job_id: str) -> dict:
 
 
 def _collect_areas(job_id: str) -> tuple[dict, dict]:
-    """Sum area (sq ft) per material code across every detected page; + names."""
+    """Sum area (sq ft) per material code across every detected page; + names.
+    Plant codes (counted as species) are excluded — a tree mis-detected as a big
+    'area' zone must not appear as hardscape SF in the estimate."""
     status = store.read_status(job_id) or {}
     n = int(status.get("page_count") or 0)
     cfg = store.read_config(job_id) or {}
     mats = cfg.get("materials") if isinstance(cfg.get("materials"), dict) else {}
+
+    # codes that the planting pass counted as species -> not area materials
+    plant_codes: set[str] = set()
+    for p in range(n):
+        s2 = store.read_stage2(job_id, p)
+        for t in (s2 or {}).get("takeoff", []) or []:
+            if t.get("source") == "planting" and t.get("code"):
+                plant_codes.add(str(t["code"]).upper())
+
     areas: dict[str, float] = {}
     names: dict[str, str] = {}
     for p in range(n):
@@ -73,7 +84,7 @@ def _collect_areas(job_id: str) -> tuple[dict, dict]:
             continue
         for g in s2["groups"]:
             code, sqft = g.get("label"), g.get("sqft")
-            if not code or not sqft:
+            if not code or not sqft or str(code).upper() in plant_codes:
                 continue
             areas[code] = areas.get(code, 0.0) + float(sqft)
             if code not in names:

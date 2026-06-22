@@ -23,7 +23,7 @@ from . import db, estimate_pricing, pricing, store
 from .celery_app import EAGER
 from .schemas import JobStatus, UploadResponse
 from .tasks import (run_stage1, run_stage1_config, run_stage2, stage1_config,
-                    stage1_select, stage2_detect)
+                    stage1_select, stage2_detect, detect_kept_pages, stage2_detect_all)
 
 app = FastAPI(title="Outdoor Elements — Takeoff (Stage 1)")
 
@@ -245,6 +245,38 @@ def start_stage2(job_id: str, page: int, background: BackgroundTasks,
     else:
         stage2_detect.delay(job_id, page, force)
     return {"job_id": job_id, "page": page, "eager": EAGER}
+
+
+@app.post("/api/jobs/{job_id}/stage2/all")
+def start_stage2_all(job_id: str, background: BackgroundTasks) -> dict:
+    """Kick off detection of EVERY kept page (sequential, background)."""
+    if not store.pdf_path(job_id).exists():
+        raise HTTPException(status_code=404, detail="Unknown job id.")
+    status = store.read_status(job_id) or {}
+    kept = [p for p in status.get("pages", []) if p.get("keep")]
+    # mark not-yet-started kept pages as queued so the UI shows them pending now
+    for p in kept:
+        if store.read_stage2(job_id, int(p["index"])) is None:
+            store.write_stage2(job_id, int(p["index"]),
+                               {"job_id": job_id, "page": int(p["index"]), "status": "queued"})
+    if EAGER:
+        background.add_task(detect_kept_pages, job_id)
+    else:
+        stage2_detect_all.delay(job_id)
+    return {"ok": True, "pages": len(kept)}
+
+
+@app.get("/api/jobs/{job_id}/stage2/status")
+def stage2_status_all(job_id: str) -> dict:
+    """Status of every kept page: pending|queued|running|done|error."""
+    status = store.read_status(job_id) or {}
+    pages: dict[str, str] = {}
+    for p in status.get("pages", []):
+        if not p.get("keep"):
+            continue
+        s2 = store.read_stage2(job_id, int(p["index"]))
+        pages[str(int(p["index"]))] = (s2 or {}).get("status", "pending")
+    return {"pages": pages}
 
 
 @app.get("/api/jobs/{job_id}/stage2/{page}")

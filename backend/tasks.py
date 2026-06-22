@@ -233,12 +233,12 @@ def stage2_detect(job_id: str, page: int, force: bool = False) -> dict:
 
 
 def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
-    # Resume-safe: never re-detect over an already-completed page unless forced —
-    # re-detection re-seeds the zones table and would wipe the user's edits. The
-    # saved result already reflects every edit (each edit re-renders it).
+    # Resume-safe: never re-detect a page that's already done OR currently being
+    # detected (queued/running) unless forced — prevents the batch and a manual
+    # trigger racing on the same page.
     if not force:
         existing = store.read_stage2(job_id, page)
-        if existing and existing.get("status") == "done":
+        if existing and existing.get("status") in ("done", "running", "queued"):
             return existing
     pdf = store.pdf_path(job_id)
     status = {"job_id": job_id, "page": page, "status": "running"}
@@ -324,6 +324,30 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
         status.update(status="error", error=f"{type(exc).__name__}: {exc}")
     store.write_stage2(job_id, page, status)
     return status
+
+
+@shared_task(name="stage2_detect_all")
+def stage2_detect_all(job_id: str) -> dict:
+    """Celery entry point for batch detection of every kept page."""
+    return detect_kept_pages(job_id)
+
+
+def detect_kept_pages(job_id: str) -> dict:
+    """Detect every KEPT page of the job, sequentially. Resume-safe: run_stage2
+    returns the saved result for an already-done page, so re-runs are cheap."""
+    status = store.read_status(job_id) or {}
+    detected = skipped = 0
+    for p in status.get("pages", []):
+        if not p.get("keep"):
+            continue
+        page = int(p["index"])
+        before = store.read_stage2(job_id, page)
+        if before and before.get("status") == "done":
+            skipped += 1
+            continue
+        run_stage2(job_id, page)
+        detected += 1
+    return {"detected": detected, "skipped": skipped}
 
 
 def _open_page(pdf_path, page: int):

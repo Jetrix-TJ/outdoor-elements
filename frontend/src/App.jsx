@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   uploadPdf, pollJob, thumbUrl, previewUrl,
   startStage2, pollStage2, stage2OverlayUrl,
+  startAllStage2, getStage2Status, getStage2,
   getConfig, editScale, getPricing, editRate, getEstimate,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
@@ -58,10 +59,12 @@ export default function App({ onLogout }) {
   const [view, setView] = useState("stage1");   // "stage1" | "stage2"
   const [s2, setS2] = useState(null);           // stage 2 status/result
   const [s2page, setS2page] = useState(null);   // page index being detected
+  const [s2statuses, setS2statuses] = useState({}); // { pageIndex: "pending|queued|running|done|error" }
   const [config, setConfig] = useState(null);   // Gemini auto-config (reviewable)
   const [editMode, setEditMode] = useState(false); // interactive select on the overlay
   const [pricing, setPricing] = useState(null);  // costed estimate for the page
   const [estimate, setEstimate] = useState(null); // combined OE estimate (all pages)
+  const [editRates, setEditRates] = useState(false); // show inline rate inputs on the scope doc
   const [overlayKey, setOverlayKey] = useState(0); // cache-bust for the overlay image
   const [zones, setZones] = useState([]);          // active zones (id-addressable + geometry)
   const [deletedZones, setDeletedZones] = useState([]); // soft-deleted zones
@@ -145,6 +148,16 @@ export default function App({ onLogout }) {
     getEstimate(job.job_id).then(setEstimate).catch(() => {});
   }, [view, job]);
 
+  // Re-fetch estimate while on Stage 3 as late sheets finish extracting.
+  // Stops once all sheets are terminal (done or error).
+  useEffect(() => {
+    if (view !== "stage3" || !job?.job_id) return;
+    const vals = Object.values(s2statuses);
+    const allTerminal = vals.length > 0 && vals.every((s) => s === "done" || s === "error");
+    if (allTerminal) return;
+    getEstimate(job.job_id).then(setEstimate).catch(() => {});
+  }, [s2statuses, view, job]);
+
   async function onRate(code, val) {
     const n = parseFloat(val);
     if (!(n >= 0)) return;
@@ -187,6 +200,24 @@ export default function App({ onLogout }) {
     tick();
     return () => { alive = false; };
   }, [job?.job_id, config]);
+
+  // While in Stage 2, poll batch status until every kept page is done/error.
+  useEffect(() => {
+    if (view !== "stage2" || !job?.job_id) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const { pages } = await getStage2Status(job.job_id);
+        if (!alive) return;
+        setS2statuses(pages || {});
+        const vals = Object.values(pages || {});
+        const pending = vals.some((s) => s === "pending" || s === "queued" || s === "running");
+        if (pending) setTimeout(tick, 1500);
+      } catch { if (alive) setTimeout(tick, 3000); }
+    };
+    tick();
+    return () => { alive = false; };
+  }, [view, job]);
 
   async function handleFile(files) {
     const list = Array.from(files && files.length !== undefined ? files : [files]).filter(Boolean);
@@ -240,10 +271,50 @@ export default function App({ onLogout }) {
     }
   }
 
+  // View a kept page: if its detection is done, load the cached result instantly;
+  // otherwise just reflect its live status (the batch is extracting it). Does NOT
+  // trigger a new detection — that's the batch's job, so switching tabs is instant.
+  async function selectPage(idx) {
+    setS2page(idx);
+    setOverlayKey((k) => k + 1);
+    const st = s2statuses[String(idx)];
+    if (st === "done") {
+      try {
+        const s = await getStage2(job.job_id, idx);
+        setS2(s);
+        loadZones(idx);
+      } catch (e) { setS2({ status: "error", error: e.message }); }
+    } else {
+      // Unknown status (e.g. re-entering a fully-extracted job before poll returns):
+      // do a read GET to check whether the result is already available.
+      try {
+        const s = await getStage2(job.job_id, idx);
+        if (s?.status === "done") {
+          setS2(s);
+          loadZones(idx);
+        } else {
+          setS2({ status: st === "error" ? "error" : "running" });
+        }
+      } catch {
+        setS2({ status: st === "error" ? "error" : "running" });
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (view !== "stage2" || s2page == null) return;
+    if (s2statuses[String(s2page)] === "done" && s2?.status !== "done") {
+      getStage2(job.job_id, s2page).then((s) => { setS2(s); loadZones(s2page); }).catch(() => {});
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [s2statuses, s2page, view]);
+
   function goStage2() {
     setView("stage2");
     const first = job.pages.find((p) => p.keep);
-    runStage2(first ? first.index : 0);
+    const firstIdx = first ? first.index : 0;
+    startAllStage2(job.job_id).catch((e) => setError(e.message)); // batch in background
+    selectPage(firstIdx); // show the first sheet (loads when its detection completes)
   }
 
   const onDrop = (e) => {
@@ -393,15 +464,27 @@ export default function App({ onLogout }) {
           </div>
 
           <div className="s2pages">
-            {kept.map((p) => (
-              <button
-                key={p.index}
-                className={`pagepick ${s2page === p.index ? "active" : ""}`}
-                onClick={() => runStage2(p.index)}
-              >
-                {p.sheet}
-              </button>
-            ))}
+            {(() => {
+              const vals = Object.values(s2statuses);
+              const done = vals.filter((s) => s === "done").length;
+              return vals.length ? (
+                <span className="batch-progress">Extracted {done}/{vals.length} sheets</span>
+              ) : null;
+            })()}
+            {kept.map((p) => {
+              const st = s2statuses[String(p.index)] || "pending";
+              return (
+                <button
+                  key={p.index}
+                  className={`pagepick ${s2page === p.index ? "active" : ""} st-${st}`}
+                  onClick={() => selectPage(p.index)}
+                  title={st === "done" ? "Extracted — click to view" : `Extracting… (${st})`}
+                >
+                  <span className={`dot ${st}`} />
+                  {p.sheet}
+                </button>
+              );
+            })}
             <span className="anypage">
               or detect page #
               <input
@@ -599,12 +682,19 @@ export default function App({ onLogout }) {
             </div>
           )}
 
-          {s2?.status === "done" && (
+          {Object.values(s2statuses).some((s) => s === "done") && (
             <div className="actions">
               <button className="secondary" onClick={() => setView("stage1")}>← Pages</button>
-              <button className="primary" onClick={() => setView("stage3")}>
-                Continue → Stage 3 (measure &amp; compare)
-              </button>
+              {(() => {
+                const vals = Object.values(s2statuses);
+                const done = vals.filter((s) => s === "done").length;
+                const all = vals.length && done === vals.length;
+                return (
+                  <button className="primary" onClick={() => setView("stage3")}>
+                    {all ? "Continue → Stage 3 (estimate)" : `Continue → Stage 3 (${done}/${vals.length} sheets ready)`}
+                  </button>
+                );
+              })()}
             </div>
           )}
         </section>
@@ -625,59 +715,70 @@ export default function App({ onLogout }) {
           ) : (() => {
             const money = (v) => `$${Math.round(v).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
             const sf = (rows) => Math.round(rows.reduce((n, r) => n + (r.qty || 0), 0)).toLocaleString();
-            // a scope item: "Provide and install <Material> (<qty> SF)  @ $<rate>/SF"
+            const titleCase = (s) => s.split(" / ")[0].toLowerCase().replace(/\b\w/g, (c) => c.toUpperCase());
+            const disciplines = estimate.sections.map((s) => titleCase(s.name)).join(", ");
             const item = (r) => (
               <li key={r.code} className="oe-item">
-                Provide and install <b>{r.name || r.code}</b> ({r.qty.toLocaleString()} SF)
-                <span className="oe-at"> @ $
-                  <input
-                    className="rate-in" type="number" min="0" step="0.5"
-                    defaultValue={r.rate}
-                    onBlur={(e) => onRate(r.code, e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                  />/SF
-                </span>
+                Provide and install <b>{r.name || r.code}</b> ({r.qty.toLocaleString()} SF){editRates && (
+                  <span className="oe-at"> &nbsp;@&nbsp;$
+                    <input
+                      className="rate-in" type="number" min="0" step="0.5"
+                      defaultValue={r.rate}
+                      onBlur={(e) => onRate(r.code, e.target.value)}
+                      onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                    />/SF
+                  </span>
+                )}
               </li>
             );
             return (
-              <section className="pricing oe-scope-doc">
-                <div className="panel-head">
-                  <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">request_quote</span></span>
-                  <h3>Scope of Work <span className="muted">· Outdoor Elements · all {estimate.page_count} detected page(s)</span></h3>
+              <>
+                <div className="oe-doc-bar">
+                  <button className={`csv-btn ${editRates ? "on" : ""}`} onClick={() => setEditRates((v) => !v)}>
+                    <span className="material-symbols-outlined">{editRates ? "check" : "edit"}</span>
+                    {editRates ? "Done" : "Edit rates"}
+                  </button>
                   <button className="csv-btn" onClick={downloadPricingCsv} title="Download as CSV">
                     <span className="material-symbols-outlined">download</span> CSV
                   </button>
                 </div>
-                {estimate.sections.map((sec) => {
-                  const allRows = [...sec.lines, ...sec.subsections.flatMap((s) => s.lines)];
-                  return (
-                    <div className="oe-disc" key={sec.name}>
-                      <h4 className="oe-disc-head">{sec.name} <span className="oe-sf">({sf(allRows)} SF)</span></h4>
-                      {sec.subsections.map((s) => (
-                        <div className="oe-subsec" key={s.name}>
-                          <div className="oe-subsec-head">
-                            <span>{s.name}</span><span className="oe-lump">{money(s.total)}</span>
+                <div className="oe-paper">
+                  <div className="oe-letterhead">
+                    <div className="oe-brand">Outdoor Elements</div>
+                    <div className="oe-brand-tag">LANDSCAPE · HARDSCAPE · POOL</div>
+                  </div>
+                  <div className="oe-proj">{job.filename}</div>
+                  <h2 className="oe-exhibit">EXHIBIT &ldquo;A&rdquo;</h2>
+                  <h3 className="oe-sow">OUTDOOR ELEMENTS, LLC. SCOPE OF WORK</h3>
+                  <p className="oe-intro">
+                    Outdoor Elements, LLC. hereby proposes to install {disciplines} as
+                    described herein, based on the takeoff of the uploaded plan set
+                    ({estimate.page_count} sheet{estimate.page_count === 1 ? "" : "s"}).
+                  </p>
+                  {estimate.sections.map((sec) => {
+                    const allRows = [...sec.lines, ...sec.subsections.flatMap((s) => s.lines)];
+                    return (
+                      <div className="oe-disc" key={sec.name}>
+                        <h4 className="oe-disc-head">{titleCase(sec.name).toUpperCase()} <span className="oe-sf">({sf(allRows)} SF)</span></h4>
+                        {sec.subsections.map((s) => (
+                          <div className="oe-subsec" key={s.name}>
+                            <div className="oe-subsec-head">
+                              <span className="oe-subsec-name">{s.name}</span>
+                              <span className="oe-lump">{money(s.total)}</span>
+                            </div>
+                            <ol className="oe-scope">{s.lines.map(item)}</ol>
                           </div>
-                          <ol className="oe-scope">{s.lines.map(item)}</ol>
+                        ))}
+                        {sec.lines.length > 0 && <ol className="oe-scope">{sec.lines.map(item)}</ol>}
+                        <div className="oe-disc-total">
+                          {titleCase(sec.name)} Total: {money(sec.total)}
                         </div>
-                      ))}
-                      {sec.lines.length > 0 && <ol className="oe-scope">{sec.lines.map(item)}</ol>}
-                      <div className="oe-disc-total">
-                        <span>{sec.name.split(" / ")[0].replace(/\b\w/g, (c) => c)} Total:</span>
-                        <span>{money(sec.total)}</span>
                       </div>
-                    </div>
-                  );
-                })}
-                <div className="oe-grand">
-                  <span>GRAND TOTAL</span>
-                  <span>{money(estimate.grand_total)}</span>
+                    );
+                  })}
+                  <div className="oe-grand-line">GRAND TOTAL: {money(estimate.grand_total)}</div>
                 </div>
-                <p className="hint">
-                  Outdoor Elements scope of work, combined across all detected pages.
-                  Edit any $/SF rate (Enter) — the subsection lump sum, section and grand total update.
-                </p>
-              </section>
+              </>
             );
           })()}
         </section>

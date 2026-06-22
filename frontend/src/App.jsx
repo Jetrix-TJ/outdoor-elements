@@ -335,6 +335,30 @@ export default function App({ onLogout }) {
     selectPage(firstIdx); // show the first sheet (loads when its detection completes)
   }
 
+  // Which stages can be jumped to from the top stepper. Stage 1 once a job is
+  // loaded; Stages 2 & 3 once page-selection (job.status) is done.
+  function canGoStage(n) {
+    if (!job) return false;
+    if (n === 1) return true;
+    return job.status === "done";
+  }
+
+  // Navigate via the clickable top stepper. Pure navigation — no batch re-kick;
+  // entering Stage 2 just makes sure a sheet is selected so the view isn't blank.
+  function navStage(n) {
+    if (!canGoStage(n)) return;
+    if (n === 1) { setView("stage1"); return; }
+    if (n === 2) {
+      setView("stage2");
+      if (s2page == null) {
+        const first = job.pages.find((p) => p.keep);
+        if (first) selectPage(first.index);
+      }
+      return;
+    }
+    if (n === 3) setView("stage3");
+  }
+
   const onDrop = (e) => {
     e.preventDefault();
     handleFile(e.dataTransfer.files);
@@ -361,7 +385,8 @@ export default function App({ onLogout }) {
         </p>
       </header>
 
-      <Stages current={view === "stage3" ? 3 : view === "stage2" ? 2 : 1} done={job?.status === "done"} />
+      <Stages current={view === "stage3" ? 3 : view === "stage2" ? 2 : 1} done={job?.status === "done"}
+              onGo={navStage} canGo={canGoStage} />
 
       {!job && (
         <div
@@ -905,7 +930,7 @@ function ConfigPanel({ jobId, config, setConfig }) {
   );
 }
 
-function Stages({ current, done }) {
+function Stages({ current, done, onGo, canGo }) {
   return (
     <ol className="stepper" aria-label="Progress">
       {STAGES.map((s, i) => {
@@ -915,15 +940,27 @@ function Stages({ current, done }) {
             : s.n === current
             ? "current"
             : "todo";
+        // A step is navigable when the parent says it's reachable and it isn't
+        // the page we're already on.
+        const clickable = !!(canGo && canGo(s.n)) && s.n !== current;
         return (
-          <li key={s.n} className={`stp ${state}`} aria-current={state === "current" ? "step" : undefined}>
+          <li key={s.n}
+              className={`stp ${state}${clickable ? " clickable" : ""}`}
+              aria-current={state === "current" ? "step" : undefined}>
             {i > 0 && <span className={`stp-line ${s.n <= current ? "fill" : ""}`} aria-hidden="true" />}
-            <span className="stp-dot">
-              {state === "done"
-                ? <span className="material-symbols-outlined">check</span>
-                : s.n}
-            </span>
-            <span className="stp-label">{s.name}</span>
+            <button
+              type="button"
+              className="stp-btn"
+              disabled={!clickable}
+              onClick={() => clickable && onGo(s.n)}
+              title={clickable ? `Go to ${s.name}` : undefined}>
+              <span className="stp-dot">
+                {state === "done"
+                  ? <span className="material-symbols-outlined">check</span>
+                  : s.n}
+              </span>
+              <span className="stp-label">{s.name}</span>
+            </button>
           </li>
         );
       })}

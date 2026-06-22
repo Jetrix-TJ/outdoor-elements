@@ -11,6 +11,7 @@ import {
 import ZoneEditor from "./ZoneEditor.jsx";
 import PoolScopePanel from "./PoolScopePanel.jsx";
 import PreviousJobs from "./PreviousJobs.jsx";
+import { pickResumeStage } from "./resume.js";
 
 const STAGES = [
   { n: 1, name: "Upload & select pages", active: true },
@@ -240,7 +241,9 @@ export default function App({ onLogout }) {
     }
   }
 
-  // Resume a previous job by job_id (from the Previous Jobs panel).
+  // Resume a previous job by job_id (from the Previous Jobs panel). Lands on the
+  // furthest completed stage (Stage 3 when extraction is complete) instead of
+  // restarting at Stage 1. Read-only — never triggers a new detection.
   async function handleResume(jobId) {
     setError(null);
     setBusy(true);
@@ -251,6 +254,15 @@ export default function App({ onLogout }) {
     try {
       await pollJob(jobId, (j) => setJob({ ...j, job_id: jobId }));
       setResumed(true);
+      try {
+        const { pages } = await getStage2Status(jobId);
+        setS2statuses(pages || {});
+        const { view: target, firstDone } = pickResumeStage(pages || {});
+        if (firstDone != null) setS2page(firstDone);
+        setView(target);
+      } catch {
+        // No Stage-2 status available yet → stay on Stage 1.
+      }
     } catch (e) {
       setError(e.message);
     } finally {

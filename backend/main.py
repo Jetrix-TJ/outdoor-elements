@@ -235,25 +235,9 @@ def page_preview(job_id: str, index: int) -> FileResponse:
 
 
 # ---------- Stage 2: detect & color surface regions on a page ----------
-@app.post("/api/jobs/{job_id}/stage2/{page}")
-def start_stage2(job_id: str, page: int, background: BackgroundTasks,
-                 force: bool = False) -> dict:
-    if not store.pdf_path(job_id).exists():
-        raise HTTPException(status_code=404, detail="Unknown job id.")
-    # Resume-safe: if this page was already detected (and possibly edited), do NOT
-    # re-detect — that would wipe the user's zone deletions. Return the saved
-    # result (the frontend polls GET). Pass ?force=true to deliberately re-detect.
-    existing = store.read_stage2(job_id, page)
-    if not force and existing and existing.get("status") == "done":
-        return {"job_id": job_id, "page": page, "eager": EAGER, "cached": True}
-    store.write_stage2(job_id, page, {"job_id": job_id, "page": page, "status": "queued"})
-    if EAGER:
-        background.add_task(run_stage2, job_id, page, force)
-    else:
-        stage2_detect.delay(job_id, page, force)
-    return {"job_id": job_id, "page": page, "eager": EAGER}
-
-
+# NOTE: the literal "/stage2/all" route MUST be declared before the
+# "/stage2/{page}" route — FastAPI matches in declaration order, and otherwise
+# "all" is captured by {page} and fails int parsing (422).
 @app.post("/api/jobs/{job_id}/stage2/all")
 def start_stage2_all(job_id: str, background: BackgroundTasks) -> dict:
     """Kick off detection of EVERY kept page (sequential, background)."""
@@ -271,6 +255,25 @@ def start_stage2_all(job_id: str, background: BackgroundTasks) -> dict:
     else:
         stage2_detect_all.delay(job_id)
     return {"ok": True, "pages": len(kept)}
+
+
+@app.post("/api/jobs/{job_id}/stage2/{page}")
+def start_stage2(job_id: str, page: int, background: BackgroundTasks,
+                 force: bool = False) -> dict:
+    if not store.pdf_path(job_id).exists():
+        raise HTTPException(status_code=404, detail="Unknown job id.")
+    # Resume-safe: if this page was already detected (and possibly edited), do NOT
+    # re-detect — that would wipe the user's zone deletions. Return the saved
+    # result (the frontend polls GET). Pass ?force=true to deliberately re-detect.
+    existing = store.read_stage2(job_id, page)
+    if not force and existing and existing.get("status") == "done":
+        return {"job_id": job_id, "page": page, "eager": EAGER, "cached": True}
+    store.write_stage2(job_id, page, {"job_id": job_id, "page": page, "status": "queued"})
+    if EAGER:
+        background.add_task(run_stage2, job_id, page, force)
+    else:
+        stage2_detect.delay(job_id, page, force)
+    return {"job_id": job_id, "page": page, "eager": EAGER}
 
 
 @app.get("/api/jobs/{job_id}/stage2/status")

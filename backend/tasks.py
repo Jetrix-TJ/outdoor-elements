@@ -233,12 +233,15 @@ def stage2_detect(job_id: str, page: int, force: bool = False) -> dict:
 
 
 def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
-    # Resume-safe: never re-detect a page that's already done OR currently being
-    # detected (queued/running) unless forced — prevents the batch and a manual
-    # trigger racing on the same page.
+    # Resume-safe: never re-detect a page that's already done (preserves the
+    # user's zone edits) or currently mid-detection (another run_stage2 wrote
+    # "running" — avoids racing it) unless forced. NOTE: "queued" must NOT be
+    # skipped here — the endpoints pre-mark pages "queued" so the UI shows them
+    # pending, and run_stage2 is the worker that turns "queued" into a real
+    # detection. Skipping "queued" would deadlock the batch (it never runs).
     if not force:
         existing = store.read_stage2(job_id, page)
-        if existing and existing.get("status") in ("done", "running", "queued"):
+        if existing and existing.get("status") in ("done", "running"):
             return existing
     pdf = store.pdf_path(job_id)
     status = {"job_id": job_id, "page": page, "status": "running"}

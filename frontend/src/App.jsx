@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   uploadPdf, pollJob, thumbUrl, previewUrl,
   startStage2, pollStage2, stage2OverlayUrl,
-  getConfig, editScale, getPricing, editRate,
+  getConfig, editScale, getPricing, editRate, getEstimate,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
   getPoolScope,
@@ -61,6 +61,7 @@ export default function App({ onLogout }) {
   const [config, setConfig] = useState(null);   // Gemini auto-config (reviewable)
   const [editMode, setEditMode] = useState(false); // interactive select on the overlay
   const [pricing, setPricing] = useState(null);  // costed estimate for the page
+  const [estimate, setEstimate] = useState(null); // combined OE estimate (all pages)
   const [overlayKey, setOverlayKey] = useState(0); // cache-bust for the overlay image
   const [zones, setZones] = useState([]);          // active zones (id-addressable + geometry)
   const [deletedZones, setDeletedZones] = useState([]); // soft-deleted zones
@@ -138,32 +139,36 @@ export default function App({ onLogout }) {
     catch (e) { setError(e.message); }
   }
 
-  // load pricing when entering Stage 3 (or after an edit clears it)
+  // load the combined OE estimate (all detected pages) when entering Stage 3
   useEffect(() => {
-    if (view !== "stage3" || s2?.status !== "done" || pricing || !job?.job_id) return;
-    getPricing(job.job_id, s2page).then(setPricing).catch(() => {});
-  }, [view, s2, pricing, job, s2page]);
+    if (view !== "stage3" || !job?.job_id) return;
+    getEstimate(job.job_id).then(setEstimate).catch(() => {});
+  }, [view, job]);
 
   async function onRate(code, val) {
     const n = parseFloat(val);
     if (!(n >= 0)) return;
-    setPricing(await editRate(job.job_id, s2page, code, n));
+    await editRate(job.job_id, s2page ?? 0, code, n);   // rates are per-job
+    getEstimate(job.job_id).then(setEstimate).catch(() => {});  // refresh totals
   }
 
-  // Download the costed estimate as a CSV file (Stage 3).
+  // Download the combined OE estimate as a CSV (Stage 3): section, subsection, line.
   function downloadPricingCsv() {
-    if (!pricing) return;
+    if (!estimate || !estimate.sections) return;
     const esc = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
-    const rows = [["Material", "Description", "Quantity", "Unit", "Rate ($)", "Cost ($)"]];
-    pricing.rows.forEach((r) =>
-      rows.push([r.code, r.name || "", r.qty, r.unit, r.rate, r.cost]));
-    rows.push(["", "", "", "", "Total", pricing.total]);
+    const rows = [["Section", "Subsection", "Code", "Description", "Quantity", "Unit", "Rate ($)", "Cost ($)"]];
+    const push = (sec, sub, r) => rows.push([sec, sub, r.code, r.name || "", r.qty, r.unit, r.rate, r.cost]);
+    estimate.sections.forEach((sec) => {
+      sec.subsections.forEach((s) => s.lines.forEach((r) => push(sec.name, s.name, r)));
+      sec.lines.forEach((r) => push(sec.name, "", r));
+    });
+    rows.push(["", "", "", "", "", "", "GRAND TOTAL", estimate.grand_total]);
     const csv = rows.map((r) => r.map(esc).join(",")).join("\r\n");
     const blob = new Blob(["﻿" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = `estimate_${job.job_id}_p${s2page}.csv`;
+    a.download = `OE_estimate_${job.job_id}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -615,68 +620,57 @@ export default function App({ onLogout }) {
             <span className="muted">Stage 3 · estimate · Outdoor Elements scope of work</span>
           </div>
 
-          {(!s2 || s2.status !== "done") && (
-            <div className="status">Run Stage 2 first.</div>
-          )}
-
-          {s2?.status === "done" && pricing && (() => {
-            // group line items into Outdoor-Elements scope sections (like the OE
-            // proposal: Swimming Pool/Spa, Hardscape, Landscape) instead of a flat
-            // table — section subtotals roll up to a grand total.
-            // stems (leading boundary only) so plurals/suffixes match too
-            const SECTIONS = [
-              { name: "SWIMMING POOL & SPA", re: /\b(pool|spa|tanning|aquatic|water\s*feature)/i },
-              { name: "HARDSCAPE", re: /\b(paver|concrete|tile|stone|wall|border|edg|coping|band|gravel|granite|boulder|rock|pebble|step|stair|deck|veneer|surface|pavement|sidewalk|patio)/i },
-              { name: "LANDSCAPE / PLANTING", re: /\b(tree|shrub|plant|grass|turf|sod|ground\s*cover|annual|perennial|mulch|palm|vine|holly|oak|fern|sage|azalea|boxwood|liriope|nandina)/i },
-            ];
-            const sectionOf = (r) => (SECTIONS.find((s) => s.re.test(`${r.name || ""} ${r.code || ""}`))?.name) || "OTHER / GENERAL";
-            const groups = {};
-            for (const r of pricing.rows) (groups[sectionOf(r)] ||= []).push(r);
-            const order = [...SECTIONS.map((s) => s.name), "OTHER / GENERAL"].filter((n) => groups[n]);
-            const sub = (rows) => rows.reduce((n, r) => n + (r.cost || 0), 0);
+          {!estimate || !estimate.sections || estimate.sections.length === 0 ? (
+            <div className="status">No priced takeoff yet — detect material pages in Stage 2, then return here.</div>
+          ) : (() => {
             const money = (v) => `$${Math.round(v).toLocaleString()}`;
+            const line = (r) => (
+              <li key={r.code} className="oe-line">
+                <code className="oe-code">{r.code}</code>
+                <span className="oe-desc">{r.name || r.code}</span>
+                <span className="oe-qty">{r.qty.toLocaleString()} {r.unit}</span>
+                <span className="oe-rate">
+                  $<input
+                    className="rate-in" type="number" min="0" step="0.5"
+                    defaultValue={r.rate}
+                    onBlur={(e) => onRate(r.code, e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
+                  />
+                </span>
+                <span className="oe-cost">{money(r.cost)}</span>
+              </li>
+            );
             return (
               <section className="pricing oe-estimate">
                 <div className="panel-head">
                   <span className="card-tile" aria-hidden="true"><span className="material-symbols-outlined">request_quote</span></span>
-                  <h3>Estimate <span className="muted">· Outdoor Elements scope of work</span></h3>
+                  <h3>Estimate <span className="muted">· Outdoor Elements scope · all {estimate.page_count} detected page(s)</span></h3>
                   <button className="csv-btn" onClick={downloadPricingCsv} title="Download as CSV">
                     <span className="material-symbols-outlined">download</span> CSV
                   </button>
                 </div>
-                {order.map((name) => (
-                  <div className="oe-section" key={name}>
+                {estimate.sections.map((sec) => (
+                  <div className="oe-section" key={sec.name}>
                     <div className="oe-sec-head">
-                      <span className="oe-sec-name">{name}</span>
-                      <span className="oe-sec-total">{money(sub(groups[name]))}</span>
+                      <span className="oe-sec-name">{sec.name}</span>
+                      <span className="oe-sec-total">{money(sec.total)}</span>
                     </div>
-                    <ul className="oe-lines">
-                      {groups[name].map((r) => (
-                        <li key={r.code} className="oe-line">
-                          <code className="oe-code">{r.code}</code>
-                          <span className="oe-desc">{r.name || r.code}</span>
-                          <span className="oe-qty">{r.qty.toLocaleString()} {r.unit}</span>
-                          <span className="oe-rate">
-                            $<input
-                              className="rate-in" type="number" min="0" step="0.5"
-                              defaultValue={r.rate}
-                              onBlur={(e) => onRate(r.code, e.target.value)}
-                              onKeyDown={(e) => { if (e.key === "Enter") e.target.blur(); }}
-                            />
-                          </span>
-                          <span className="oe-cost">{money(r.cost)}</span>
-                        </li>
-                      ))}
-                    </ul>
+                    {sec.subsections.map((s) => (
+                      <div className="oe-sub" key={s.name}>
+                        <div className="oe-sub-head"><span>{s.name}</span><span>{money(s.total)}</span></div>
+                        <ul className="oe-lines">{s.lines.map(line)}</ul>
+                      </div>
+                    ))}
+                    {sec.lines.length > 0 && <ul className="oe-lines">{sec.lines.map(line)}</ul>}
                   </div>
                 ))}
                 <div className="oe-grand">
                   <span>GRAND TOTAL</span>
-                  <span>{money(pricing.total)}</span>
+                  <span>{money(estimate.grand_total)}</span>
                 </div>
                 <p className="hint">
-                  Grouped like the Outdoor Elements scope of work. Edit any rate (Enter) —
-                  the line, section subtotal and grand total update. Quantities reflect Stage-2 edits.
+                  Combined across all detected pages, in the Outdoor Elements scope-of-work format.
+                  Edit any rate (Enter) — the line, section and grand total update.
                 </p>
               </section>
             );

@@ -151,6 +151,13 @@ export async function editRate(jobId, page, code, rate) {
   return res.json();
 }
 
+// Combined project estimate (all detected pages) in OE scope-of-work format.
+export async function getEstimate(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/estimate`);
+  if (!res.ok) throw new Error("Could not load estimate");
+  return res.json();
+}
+
 export async function pollStage2(jobId, page, onUpdate, intervalMs = 800) {
   while (true) {
     const s = await getStage2(jobId, page);

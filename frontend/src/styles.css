@@ -153,6 +153,13 @@ header h1 .accent { color: var(--accent); }
   border-bottom: 1px solid var(--border);
 }
 .oe-sec-total { color: var(--primary); font-variant-numeric: tabular-nums; }
+.oe-sub { border-top: 1px solid #f0f0f3; }
+.oe-sub-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 7px 14px 7px 26px; font-size: 12.5px; font-weight: 600; color: var(--muted);
+  background: #fcfcfd;
+}
+.oe-sub-head span:last-child { color: var(--text); font-variant-numeric: tabular-nums; }
 .oe-lines { list-style: none; margin: 0; padding: 4px 0; }
 .oe-line {
   display: grid; grid-template-columns: 56px 1fr 120px 96px 96px;

@@ -438,6 +438,13 @@ def get_pricing(job_id: str, page: int) -> dict:
     return _pricing_for(job_id, page)
 
 
+@app.get("/api/jobs/{job_id}/estimate")
+def get_estimate(job_id: str) -> dict:
+    """Combined project estimate (all detected pages) in OE scope-of-work format."""
+    from . import estimate
+    return estimate.build_estimate(job_id)
+
+
 @app.patch("/api/jobs/{job_id}/pricing")
 def edit_rate(job_id: str, edit: RateEdit, page: int) -> dict:
     rates = store.read_prices(job_id)

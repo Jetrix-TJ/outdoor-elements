@@ -574,9 +574,8 @@ async def get_upload_url(req: UploadUrlRequest) -> dict:
     if not req.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Please upload a .pdf file.")
     try:
-        # Create the GCS client/session FIRST — if GCS is unavailable (e.g. local
-        # dev), fail before writing any job status so we don't orphan a "queued"
-        # job. The frontend then falls back to the multipart /api/upload path.
+        # Create the GCS client/session FIRST — if GCS is unavailable, fail before
+        # writing any job status so we don't orphan a "queued" job.
         from google.cloud import storage as gcs
         client = gcs.Client()
         job_id = store.new_job_id()
@@ -587,8 +586,17 @@ async def get_upload_url(req: UploadUrlRequest) -> dict:
         )
         store.write_status(job_id, {"job_id": job_id, "filename": req.filename, "status": "queued"})
         return {"job_id": job_id, "upload_url": upload_url}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Could not create upload URL: {exc}")
+    except Exception as exc:  # noqa: BLE001
+        # On Cloud Run the 32 MB request-body limit means a large file CANNOT fall
+        # back to a multipart upload — surface a clear, actionable error instead of
+        # letting the client retry into a 413. Locally there is no such limit, so
+        # tell the client it's safe to use the multipart /api/upload path.
+        if os.environ.get("K_SERVICE"):  # set only on Cloud Run
+            raise HTTPException(status_code=503, detail=(
+                f"Large-file upload needs Cloud Storage but it failed: {exc}. "
+                f"Verify bucket '{GCS_JOBS_BUCKET}' exists and the Cloud Run service "
+                f"account has 'Storage Object Admin' on it."))
+        return {"fallback": True}
 
 
 @app.post("/api/jobs/{job_id}/start")

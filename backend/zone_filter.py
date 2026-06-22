@@ -2,7 +2,8 @@
 
 Three-tier strategy:
   1. Heuristic auto-drop: legend strip (x0 > 0.75) and sub-noise (< 3 sqft).
-  2. Heuristic auto-keep: large zones (>= 50 sqft) inside the drawing area.
+  2. Heuristic auto-keep: large zones (>= 50 sqft) inside the drawing area,
+     UNLESS they cover > 20% of the page area (likely a background/border fill).
   3. Gemini vision: ambiguous zones get a single annotated-image API call.
      Fallback on any error: keep all ambiguous zones.
 """
@@ -19,6 +20,9 @@ log = logging.getLogger(__name__)
 LEGEND_STRIP_X = 0.75
 AUTO_KEEP_SQFT = 50.0
 AUTO_DROP_SQFT = 3.0
+# Zones whose bounding box covers more than this fraction of the page are likely
+# background fills / border fills — send to Gemini regardless of sqft size.
+PAGE_COVERAGE_THRESHOLD = 0.20
 
 
 def filter_false_positives(
@@ -49,14 +53,15 @@ def filter_false_positives(
     ambiguous: list[dict] = []
 
     for z in zones:
-        x0, _y0, x1, _y1 = z.get("bbox", [0, 0, 1, 1])
+        x0, y0, x1, y1 = z.get("bbox", [0, 0, 1, 1])
         area = z.get("area_sqft", 0) or 0
+        page_coverage = (x1 - x0) * (y1 - y0)
 
         if x0 > LEGEND_STRIP_X:
             pass  # definite_drop — legend/title strip
         elif area < AUTO_DROP_SQFT:
             pass  # definite_drop — sub-noise
-        elif area >= AUTO_KEEP_SQFT and x1 <= LEGEND_STRIP_X:
+        elif area >= AUTO_KEEP_SQFT and x1 <= LEGEND_STRIP_X and page_coverage <= PAGE_COVERAGE_THRESHOLD:
             definite_keep.append(z)
         else:
             ambiguous.append(z)

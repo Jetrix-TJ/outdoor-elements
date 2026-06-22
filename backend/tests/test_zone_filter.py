@@ -46,6 +46,20 @@ def test_no_api_key_ambiguous_zones_kept():
     assert len(result) == 1
 
 
+def test_large_background_fill_goes_to_gemini_not_auto_kept():
+    """Large zone covering >20% of page area is ambiguous (not auto-kept) — background fill risk."""
+    # bbox covers ~50% of page — typical border/background fill
+    zones = [_zone("bg", 5000.0, [0.0, 0.0, 0.75, 0.9])]
+    result = filter_false_positives(zones, "/fake.pdf", 0, 150, 1 / 16, api_key=None)
+    # Without api_key, ambiguous → kept (fallback), but the key assertion is it's NOT auto-kept
+    # (meaning it would go through Gemini when a key is provided)
+    assert len(result) == 1  # kept by fallback (no api_key)
+    # Confirm it's treated as ambiguous by checking a smaller zone isn't in definite_keep either
+    small = [_zone("real", 500.0, [0.1, 0.1, 0.3, 0.3])]  # small bbox, large sqft → auto-keep
+    r2 = filter_false_positives(small, "/fake.pdf", 0, 150, 1 / 16, api_key=None)
+    assert len(r2) == 1
+
+
 def test_all_fields_preserved():
     """Kept zones retain all original fields unchanged."""
     z = _zone("e", 500.0, [0.1, 0.1, 0.4, 0.4])

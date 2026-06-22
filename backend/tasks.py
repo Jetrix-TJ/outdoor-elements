@@ -20,12 +20,16 @@ def _is_pool_plan(page) -> bool:
     t = page.get_text().upper()
     if not (("POOL" in t or "SPA" in t or "AQUATIC" in t) and "PLAN" in t):
         return False
-    # Exclude sheets that show infrastructure or details, not plan-view surfaces
+    # Exclude infrastructure/detail sheets — but match against THIS sheet's TITLE
+    # BLOCK, not the whole page. The drawing index lists other sheets ("POOL
+    # DETAILS", "PIPING PLAN", …) which would otherwise falsely exclude a real
+    # Pool & Spa plan (e.g. AQ0.0 "POOL & SPA REFERENCE PLAN").
+    title = (selection._corner_title(page) or "").upper()
     EXCLUDE = ("PIPING PLAN", "EQUIPMENT PLAN", "EQUIPMENT ROOM", "RETURN PIPING",
                "SUPPLY PIPING", "POOL SECTION", "SPA SECTION", "HYDRO THERAPY",
                "HYDROTHERA", "POOL DETAILS", "SPA DETAILS", "POOL DETAIL",
                "SPA DETAIL", "CONSTRUCTION DETAILS")
-    return not any(kw in t for kw in EXCLUDE)
+    return not any(kw in title for kw in EXCLUDE)
 
 
 def _persist_masks(job_id: str, page: int, masks: dict, scale: float, dpi: int = 150) -> None:

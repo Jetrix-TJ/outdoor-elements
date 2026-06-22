@@ -3,7 +3,7 @@ import {
   uploadPdf, pollJob, thumbUrl, previewUrl,
   startStage2, pollStage2, stage2OverlayUrl,
   startAllStage2, getStage2Status, getStage2,
-  getConfig, editScale, getPricing, editRate, getEstimate,
+  getConfig, editScale, getPricing, editRate, getEstimate, setPageKeep,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
   getPoolScope,
@@ -359,6 +359,14 @@ export default function App({ onLogout }) {
     if (n === 3) setView("stage3");
   }
 
+  // Manually include/exclude a page from the takeoff set (Stage 1 review).
+  async function togglePageKeep(index, keep) {
+    try {
+      const updated = await setPageKeep(job.job_id, index, keep);
+      setJob({ ...updated, job_id: job.job_id });
+    } catch (e) { setError(e.message); }
+  }
+
   const onDrop = (e) => {
     e.preventDefault();
     handleFile(e.dataTransfer.files);
@@ -447,6 +455,10 @@ export default function App({ onLogout }) {
           </div>
 
           <h2>Required pages ({kept.length})</h2>
+          <p className="muted" style={{ marginTop: "-6px" }}>
+            Review the auto-selected sheets — exclude any that shouldn't be taken
+            off, or include a dropped sheet below, to land on exactly your set.
+          </p>
           <div className="grid">
             {kept.map((p) => (
               <figure
@@ -472,7 +484,9 @@ export default function App({ onLogout }) {
               <ul>
                 {poolPages.map((p) => (
                   <li key={p.index}>
-                    p{p.index + 1} <b>{p.sheet}</b> — {p.reason}
+                    <button className="page-toggle include" title="Include this sheet"
+                            onClick={() => togglePageKeep(p.index, true)}>+ include</button>
+                    {" "}p{p.index + 1} <b>{p.sheet}</b> — {p.reason}
                   </li>
                 ))}
               </ul>
@@ -484,7 +498,9 @@ export default function App({ onLogout }) {
             <ul>
               {dropped.map((p) => (
                 <li key={p.index}>
-                  p{p.index + 1} <b>{p.sheet}</b> {p.title && `· ${p.title}`} — {p.reason}
+                  <button className="page-toggle include" title="Include this sheet"
+                          onClick={() => togglePageKeep(p.index, true)}>+ include</button>
+                  {" "}p{p.index + 1} <b>{p.sheet}</b> {p.title && `· ${p.title}`} — {p.reason}
                 </li>
               ))}
             </ul>

@@ -19,8 +19,11 @@ async function _jsonOrText(res) {
   return ct.includes("json") ? res.json().catch(() => ({})) : { detail: await res.text() };
 }
 
-// Direct-to-GCS resumable upload for a single large file (prod path). Throws if
-// GCS isn't reachable (e.g. local dev with no bucket/credentials).
+// Direct-to-GCS resumable upload for a single large file (prod path).
+// Returns the started-job JSON on success, or null when the server signals that
+// a multipart fallback is safe (local dev, no Cloud Run size limit). Throws a
+// clear error when GCS is required but failed (prod) — so we never retry a large
+// file into Cloud Run's 32 MB cap (which returns a 413).
 async function _directGcsUpload(file) {
   const urlRes = await fetch("/api/upload-url", {
     method: "POST",
@@ -31,7 +34,9 @@ async function _directGcsUpload(file) {
     const body = await _jsonOrText(urlRes);
     throw new Error(body.detail || "Could not get upload URL");
   }
-  const { job_id, upload_url } = await urlRes.json();
+  const data = await urlRes.json();
+  if (data.fallback) return null;  // server says: safe to use multipart (local dev)
+  const { job_id, upload_url } = data;
 
   // PUT the file directly to GCS (no Cloud Run hop). GCS omits
   // Access-Control-Allow-Origin on the 200 PUT, so the browser CORS check throws
@@ -62,15 +67,14 @@ export async function uploadPdf(files) {
   // accepts a single File or a FileList/array — merged into one set server-side
   const list = files && files.length !== undefined ? Array.from(files) : [files];
 
-  // Single large file → try direct-to-GCS (bypasses Cloud Run's 32 MB limit in
-  // prod). If GCS isn't configured (local dev), fall back to the multipart path
-  // below — uvicorn has no body-size limit, so large files upload fine locally.
+  // Single large file → direct-to-GCS (bypasses Cloud Run's 32 MB limit in prod).
+  // The server returns null/fallback only in local dev (no size limit), where we
+  // drop through to multipart below. In prod a GCS failure throws a clear error
+  // rather than retrying into a 413.
   if (list.length === 1 && list[0].size > DIRECT_UPLOAD_THRESHOLD) {
-    try {
-      return await _directGcsUpload(list[0]);
-    } catch (err) {
-      console.warn("Direct GCS upload unavailable — falling back to multipart:", err.message);
-    }
+    const result = await _directGcsUpload(list[0]);
+    if (result) return result;   // GCS upload succeeded
+    // result === null → server signalled multipart is safe (local) → fall through
   }
 
   // Small files, multiple files, or GCS fallback — standard multipart upload.
@@ -87,6 +91,17 @@ export async function uploadPdf(files) {
 export async function getJob(jobId) {
   const res = await fetch(`/api/jobs/${jobId}`);
   if (!res.ok) throw new Error("Could not load job status");
+  return res.json();
+}
+
+// Manually include/exclude a page from the takeoff set. Returns updated job status.
+export async function setPageKeep(jobId, index, keep) {
+  const res = await fetch(`/api/jobs/${jobId}/pages/${index}/keep`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keep }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail || "Could not update page");
   return res.json();
 }
 

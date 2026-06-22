@@ -11,14 +11,67 @@ export async function login(passcode) {
   return res.json();
 }
 
+// Cloud Run has a 32 MB request body limit; large PDFs go direct to GCS.
+const DIRECT_UPLOAD_THRESHOLD = 28 * 1024 * 1024; // 28 MB
+
+async function _jsonOrText(res) {
+  const ct = res.headers.get("content-type") || "";
+  return ct.includes("json") ? res.json().catch(() => ({})) : { detail: await res.text() };
+}
+
 export async function uploadPdf(files) {
   // accepts a single File or a FileList/array — merged into one set server-side
   const list = files && files.length !== undefined ? Array.from(files) : [files];
+
+  // Single large file → direct-to-GCS resumable upload (bypasses Cloud Run 32 MB limit)
+  if (list.length === 1 && list[0].size > DIRECT_UPLOAD_THRESHOLD) {
+    const file = list[0];
+    const urlRes = await fetch("/api/upload-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: file.name, size: file.size }),
+    });
+    if (!urlRes.ok) {
+      const body = await _jsonOrText(urlRes);
+      throw new Error(body.detail || "Could not get upload URL");
+    }
+    const { job_id, upload_url } = await urlRes.json();
+
+    // PUT the file directly to GCS (no Cloud Run hop).
+    // GCS omits Access-Control-Allow-Origin on the 200 PUT response, so the
+    // browser CORS check throws TypeError even though the file landed.
+    // Swallow it and let /start verify via blob.exists().
+    try {
+      const putRes = await fetch(upload_url, {
+        method: "PUT",
+        headers: { "Content-Type": "application/pdf" },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error(`GCS upload failed (${putRes.status})`);
+    } catch (err) {
+      if (!(err instanceof TypeError)) throw err;
+    }
+
+    const startRes = await fetch(
+      `/api/jobs/${job_id}/start?filename=${encodeURIComponent(file.name)}`,
+      { method: "POST" }
+    );
+    if (!startRes.ok) {
+      const body = await _jsonOrText(startRes);
+      throw new Error(body.detail || "Could not start processing");
+    }
+    return startRes.json();
+  }
+
+  // Small files (or multiple files) — standard multipart upload through Cloud Run
   const form = new FormData();
   for (const f of list) form.append("files", f);
   const res = await fetch("/api/upload", { method: "POST", body: form });
-  if (!res.ok) throw new Error((await res.json()).detail || "Upload failed");
-  return res.json(); // { job_id, filename, eager, resumed }
+  if (!res.ok) {
+    const body = await _jsonOrText(res);
+    throw new Error(body.detail || "Upload failed");
+  }
+  return res.json();
 }
 
 export async function getJob(jobId) {

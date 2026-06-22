@@ -1,0 +1,15 @@
+.gcloudignore
+.git
+.gitignore
+**/__pycache__
+**/*.pyc
+.venv
+venv
+.env
+backend/jobs
+debug
+frontend/node_modules
+frontend/dist
+docs
+oe_qto_render/tests
+oe_qto_render/golden

@@ -1,0 +1,28 @@
+**/__pycache__
+**/*.pyc
+**/*.pyo
+**/*.egg-info
+.venv
+venv
+.env
+.env.*
+.git
+.gitignore
+
+# Frontend dev artifacts (we copy only the built dist from the builder stage)
+frontend/node_modules
+frontend/dist
+frontend/playwright-report
+frontend/test-results
+
+# Backend dev artifacts
+backend/jobs
+debug
+
+# Test fixtures and docs
+backend/tests
+oe_qto_render/tests
+oe_qto_render/golden
+docs
+*.md
+CLAUDE_CODE_TASK_*.md

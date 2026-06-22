@@ -42,6 +42,11 @@ DROP_TITLE = [
     "DRAINAGE PLAN", "LIGHTING PLAN", "IRRIGATION", "OVERALL", "KEY PLAN",
     "POOL PLAN", "SPA PLAN", "POOL & SPA", "POOL AND SPA", "AQUATIC",
 ]
+# Pool/spa/aquatic pages are excluded from NORMAL landscape keeping (DROP_TITLE) but
+# must NOT be excluded from the last-resort fallback — a pool-only PDF would otherwise
+# return kept_count=0 with nothing for the user to work with.
+_FALLBACK_DROP_TITLE = [k for k in DROP_TITLE if k not in
+                        ("POOL PLAN", "SPA PLAN", "POOL & SPA", "POOL AND SPA", "AQUATIC")]
 
 _CODE_RE = re.compile(r"^[A-Z]{1,3}\d\.\d{1,2}$")
 _CODE_ANY = re.compile(r"\b([A-Z]{1,3}\d\.\d{1,2})\b")
@@ -194,7 +199,7 @@ def analyze_pdf(pdf_path: str | Path) -> list[PageResult]:
         results = [classify_page(doc[i], i) for i in range(doc.page_count)]
         if not any(r.keep for r in results):
             for r in results:
-                if _is_drawing_sheet(doc[r.index]) and not [k for k in DROP_TITLE if k in r.title]:
+                if _is_drawing_sheet(doc[r.index]) and not [k for k in _FALLBACK_DROP_TITLE if k in r.title]:
                     r.keep = True
                     r.pool_style = True
                     r.reason = "no colored takeoff plan auto-detected — pick your takeoff sheets"

@@ -159,3 +159,24 @@ export async function pollStage2(jobId, page, onUpdate, intervalMs = 800) {
     await new Promise((r) => setTimeout(r, intervalMs));
   }
 }
+
+// ---------- Pool scope: line-items from the estimate PDF ----------
+export async function getPoolScope(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}/pool-scope`);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error("Failed to load pool scope");
+  return res.json();
+}
+
+// ---------- Previous jobs ----------
+export async function listJobs() {
+  const res = await fetch("/api/jobs");
+  if (!res.ok) throw new Error("Failed to load jobs");
+  return res.json();
+}
+
+export async function deleteJob(jobId) {
+  const res = await fetch(`/api/jobs/${jobId}`, { method: "DELETE" });
+  if (!res.ok) throw new Error("Failed to delete job");
+  return res.json();
+}

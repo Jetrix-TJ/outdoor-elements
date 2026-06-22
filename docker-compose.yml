@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: oe
       POSTGRES_DB: outdoor_elements
     ports:
-      - "5433:5432"   # 5432 is taken by a host Postgres; map ours to 5433
+      - "5434:5432"   # 5432 is taken by a host Postgres; map ours to 5434
     volumes:
       - oe-pgdata:/var/lib/postgresql/data
     healthcheck:

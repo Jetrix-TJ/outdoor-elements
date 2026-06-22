@@ -5,8 +5,11 @@ import {
   getConfig, editScale, getPricing, editRate,
   removeMaterial, undoEdit,
   listZones, deleteZone, restoreZone, deleteZonesBatch,
+  getPoolScope,
 } from "./api.js";
 import ZoneEditor from "./ZoneEditor.jsx";
+import PoolScopePanel from "./PoolScopePanel.jsx";
+import PreviousJobs from "./PreviousJobs.jsx";
 
 const STAGES = [
   { n: 1, name: "Upload & select pages", active: true },
@@ -201,6 +204,24 @@ export default function App({ onLogout }) {
     }
   }
 
+  // Resume a previous job by job_id (from the Previous Jobs panel).
+  async function handleResume(jobId) {
+    setError(null);
+    setBusy(true);
+    setJob(null);
+    setView("stage1");
+    setS2(null);
+    setConfig(null);
+    try {
+      await pollJob(jobId, (j) => setJob({ ...j, job_id: jobId }));
+      setResumed(true);
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Stage 2 — detect & color surface regions on a kept page.
   async function runStage2(pageIndex) {
     setS2page(pageIndex);
@@ -273,6 +294,8 @@ export default function App({ onLogout }) {
           )}
         </div>
       )}
+
+      {!job && !busy && <PreviousJobs onResume={handleResume} />}
 
       {error && <div className="error">⚠ {error}</div>}
 
@@ -439,6 +462,9 @@ export default function App({ onLogout }) {
                 {editMode && <p className="muted edit-hint">Click zones to select (click again to deselect), then Delete. Or use the 🗑 on a material to drop all of it.</p>}
                 {s2.edit_note && <p className="edit-note">{s2.edit_note}</p>}
 
+                {s2?.method === "pool" && (
+                  <PoolScopePanel jobId={job.job_id} />
+                )}
                 {(s2.groups?.length > 0 || zones.length > 0 || deletedZones.length > 0) ? (() => {
                   // One combined column: each material is a header row with its total,
                   // and its individual zones are nested beneath it (was two separate

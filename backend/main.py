@@ -142,6 +142,14 @@ def get_config(job_id: str) -> dict:
     return cfg
 
 
+@app.get("/api/jobs/{job_id}/pool-scope")
+def get_pool_scope(job_id: str) -> dict:
+    cfg = store.read_config(job_id)
+    if cfg is None or "pool_scope" not in cfg:
+        raise HTTPException(status_code=404, detail="Pool scope not available.")
+    return cfg["pool_scope"]
+
+
 @app.patch("/api/jobs/{job_id}/config/scale")
 def edit_scale(job_id: str, edit: ScaleEdit) -> dict:
     """Correct a sheet's scale (the reviewable-config step)."""
@@ -151,6 +159,42 @@ def edit_scale(job_id: str, edit: ScaleEdit) -> dict:
     cfg["sheets"][edit.sheet_id]["scale_in_per_ft"] = float(edit.scale_in_per_ft)
     store.write_config(job_id, cfg)
     return cfg
+
+
+@app.get("/api/jobs")
+def list_jobs() -> list[dict]:
+    """Return all jobs ordered by most-recent first, for the Previous Jobs panel."""
+    with db.session() as s:
+        jobs = s.query(db.Job).order_by(db.Job.created_at.desc()).all()
+        result = []
+        for j in jobs:
+            st = j.status or {}
+            result.append({
+                "job_id": j.job_id,
+                "filename": j.filename,
+                "status": st.get("status"),
+                "page_count": st.get("page_count"),
+                "kept_count": st.get("kept_count"),
+                "created_at": j.created_at.isoformat() if j.created_at else None,
+            })
+        return result
+
+
+@app.delete("/api/jobs/{job_id}")
+def delete_job(job_id: str) -> dict:
+    """Delete a job: remove DB rows (job + stage2 results + zones) and filesystem files."""
+    import shutil
+    with db.session() as s:
+        job = s.get(db.Job, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Unknown job id.")
+        s.query(db.Zone).filter(db.Zone.job_id == job_id).delete()
+        s.query(db.Stage2Result).filter(db.Stage2Result.job_id == job_id).delete()
+        s.delete(job)
+    job_path = store.job_dir(job_id)
+    if job_path.exists():
+        shutil.rmtree(job_path)
+    return {"deleted": job_id}
 
 
 @app.get("/api/jobs/{job_id}", response_model=JobStatus)

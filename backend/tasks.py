@@ -10,26 +10,22 @@ from PIL import Image
 
 from celery import shared_task
 
-from . import (estimate_parse, gemini_config, legend, pool_mode, qto_engine,
-               selection, stage2, store, zones)
+from . import (gemini_config, legend, pool_mode, pool_scope, qto_engine,
+               selection, stage2, store, zone_filter, zones)
 from .stage2 import legend_comparison
 
 
 def _is_pool_plan(page) -> bool:
-    """Heuristic: a pool/spa PLAN sheet (where the pool body is drawn)."""
+    """True only for pool/spa SURFACE PLAN sheets — not piping, equipment, or detail sheets."""
     t = page.get_text().upper()
-    return ("POOL" in t) and ("PLAN" in t) and ("POOL SECTION" not in t[:200])
-
-
-def _load_pool_targets(job_id: str) -> dict | None:
-    """Pool/spa area targets from the OE estimate: per-job estimate.pdf, else an
-    OE_ESTIMATE_PATH env fallback (for demos)."""
-    ep = store.estimate_path(job_id)
-    src = str(ep) if ep.exists() else os.environ.get("OE_ESTIMATE_PATH")
-    if not src or not os.path.exists(src):
-        return None
-    t = estimate_parse.parse_pool_targets(src)
-    return t or None
+    if not (("POOL" in t or "SPA" in t or "AQUATIC" in t) and "PLAN" in t):
+        return False
+    # Exclude sheets that show infrastructure or details, not plan-view surfaces
+    EXCLUDE = ("PIPING PLAN", "EQUIPMENT PLAN", "EQUIPMENT ROOM", "RETURN PIPING",
+               "SUPPLY PIPING", "POOL SECTION", "SPA SECTION", "HYDRO THERAPY",
+               "HYDROTHERA", "POOL DETAILS", "SPA DETAILS", "POOL DETAIL",
+               "SPA DETAIL", "CONSTRUCTION DETAILS")
+    return not any(kw in t for kw in EXCLUDE)
 
 
 def _persist_masks(job_id: str, page: int, masks: dict, scale: float, dpi: int = 150) -> None:
@@ -48,6 +44,14 @@ def _persist_masks(job_id: str, page: int, masks: dict, scale: float, dpi: int =
                         codes=np.array(codes), scale=float(scale), dpi=int(dpi))
     zlist = zones.extract_zones_from_label(label, codes, float(scale), int(dpi),
                                            source="engine")
+    zlist = zone_filter.filter_false_positives(
+        zlist,
+        store.pdf_path(job_id),
+        page,
+        int(dpi),
+        float(scale),
+        os.environ.get("GEMINI_API_KEY"),
+    )
     store.replace_zones(job_id, page, zlist)
 
 # QTO reference values (the lead's `known` dict + our QTO legend) for the
@@ -87,6 +91,19 @@ def run_stage1_config(job_id: str, filename: str) -> dict:
         cfg = {"sheets": {}, "materials": {}, "source": "fallback",
                "error": f"{type(exc).__name__}: {exc}"}
     store.write_config(job_id, cfg)
+
+    # Parse pool scope from estimate PDF (if present) and merge into config.
+    ep = store.estimate_path(job_id)
+    if ep.exists():
+        scope = pool_scope.parse_pool_scope(
+            str(ep),
+            api_key=os.environ.get("GEMINI_API_KEY"),
+        )
+        if scope:
+            cfg = store.read_config(job_id) or {}
+            cfg["pool_scope"] = scope
+            store.write_config(job_id, cfg)
+
     cur = store.read_status(job_id) or {}
     cur["config_status"] = "done"
     store.write_status(job_id, cur)
@@ -237,7 +254,6 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
         # plans where the colors don't exist yet.
         page_obj = _open_page(pdf, page)
         chromatic = stage2._page_is_chromatic(page_obj)
-        pool_targets = _load_pool_targets(job_id)
 
         # A B&W material sheet with M.x tags but no reviewed config: build a
         # default config so the lead's line-width engine runs (crisp zones)
@@ -248,23 +264,22 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
             if _has_material_tags(pdf, page, _ac):
                 auto_cfg = _ac
 
-        if not chromatic and pool_targets and _is_pool_plan(page_obj):
-            # Pool mode: estimate-guided pool/spa surface detection (raw B&W pool
-            # sheet, no tags). Scale auto-calibrated from the estimate targets.
-            res = pool_mode.detect_pool(pdf, page, pool_targets, out, dpi=120)
-            store.replace_zones(job_id, page, [])  # pool path not zone-addressable yet
-            groups = [
-                {"label": s["name"], "sqft": s["area_sf"], "regions": 1,
-                 "perimeter_lf": s.get("perimeter_lf"),
-                 "hex": "#%02x%02x%02x" % pool_mode._SURFACE_COLOR.get(
-                     s["name"].upper(), pool_mode._DEFAULT_COLOR)}
-                for s in res["surfaces"]
-            ]
+        if _is_pool_plan(page_obj):
+            # Pool mode: vision-guided pool/spa surface detection.
+            # Gemini reads the zone labels from the drawing itself; scale is
+            # parsed from the title block. No estimate PDF required.
+            res = pool_mode.detect_pool(
+                pdf, page, out, dpi=120,
+                api_key=os.environ.get("GEMINI_API_KEY"),
+            )
+            store.replace_zones(job_id, page, res.get("zones", []))
+            groups = zones.groups_from_zones(res.get("zones", []))
+            scale = res["scale_in_per_ft"]
             status.update(
                 status="done", overlay=f"overlay_p{page}.png", method="pool",
-                scale_in_per_ft=res["scale_in_per_ft"],
-                message=(f"Pool mode — {len(groups)} surfaces · estimate-guided "
-                         f"(scale 1/{1/res['scale_in_per_ft']:.1f}\" = 1')"),
+                scale_in_per_ft=scale,
+                message=(f"Pool mode — {len(groups)} surfaces · vision-guided "
+                         f"(scale 1/{1/scale:.2g}\" = 1')"),
                 groups=groups,
             )
         elif not chromatic and (sheet_cfg or auto_cfg):

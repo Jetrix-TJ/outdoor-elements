@@ -35,7 +35,17 @@ steps:
       - --cpu
       - '2'
       - --memory
-      - '2Gi'
+      - '4Gi'
+      # Stage-2 detection (fitz render + OpenCV connected-components on large
+      # landscape sheets) is memory-heavy. Running 3 sheets concurrently on a
+      # 2Gi instance OOM-killed the container mid-detection: the overlay PNG was
+      # written but the worker died before persisting status="done", so pages
+      # hung at "running" forever and the UI never left "extracting 0/N". Detect
+      # ONE sheet at a time (sequential batch) within the larger 4Gi budget.
+      # --update-env-vars (NOT --set-env-vars) so existing GEMINI_API_KEY /
+      # DATABASE_URL on the service are preserved, not wiped.
+      - --update-env-vars
+      - OE_BATCH_WORKERS=1
       # Long requests (large uploads, slow Gemini calls) aren't cut short.
       - --timeout
       - '3600'

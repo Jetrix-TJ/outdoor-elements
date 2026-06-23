@@ -599,8 +599,8 @@ async def get_upload_url(req: UploadUrlRequest) -> dict:
         return {"fallback": True}
 
 
-@app.post("/api/jobs/{job_id}/start")
-async def start_job(job_id: str, background: BackgroundTasks, filename: str = "") -> dict:
+@app.post("/api/jobs/{job_id}/start", response_model=UploadResponse)
+async def start_job(job_id: str, background: BackgroundTasks, filename: str = ""):
     """Kick off Stage 1 after a direct-to-GCS upload has completed.
 
     The browser PUTs the PDF straight into the GCS jobs bucket, which is NOT the

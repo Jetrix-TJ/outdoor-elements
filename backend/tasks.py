@@ -328,7 +328,20 @@ def run_stage2(job_id: str, page: int, force: bool = False) -> dict:
             # Use the reviewed per-sheet config when available, else the auto config.
             # Seed per-zone rows, then render the overlay + totals FROM the zones so
             # the initial view matches the (zone-based) editing model exactly.
-            cfg2 = sheet_cfg or auto_cfg
+            cfg2 = dict(sheet_cfg or auto_cfg)
+            # Legend-driven multi-material: detect EVERY area family tagged on the
+            # sheet (pavers + tile + concrete …), not just the dominant one, and
+            # drop non-area callouts (site furnishings, fences) so they can't steal
+            # a zone. Gemini's own zone_detection_codes is often incomplete (lists
+            # T.1 but not T.2) and is silently ignored by sheet_cfg_for_page, so we
+            # recompute it deterministically from the legend here. Falls back to the
+            # existing config when no area family can be confirmed.
+            materials = (cfg or {}).get("materials") if cfg else None
+            acodes = legend.area_material_codes(pdf, page, cfg2.get("clip"), materials)
+            if acodes:
+                cfg2["zone_detection_codes"] = acodes
+                cfg2["tag_pattern"] = legend.area_tag_pattern(acodes)
+                cfg2["tag_numeric_only"] = False
             res = qto_engine.run_sheet(pdf, page, cfg2, out)
             _persist_masks(job_id, page, res.get("masks", {}), res["scale_in_per_ft"])
             active = store.active_zones(job_id, page)

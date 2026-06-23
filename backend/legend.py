@@ -76,6 +76,65 @@ def _code_key(code: str):
     return (m.group(1), int(m.group(2))) if m else (code, 0)
 
 
+def _norm_code(code: str) -> str:
+    """Normalize a material code for cross-source matching: strip wrapping parens
+    and spaces, upper-case. '(F-101)' -> 'F-101', ' m.5 ' -> 'M.5'."""
+    return (code or "").strip().strip("()").strip().upper()
+
+
+def area_material_codes(raw_pdf: str, page: int, clip: dict | None = None,
+                        materials: dict | None = None) -> list[str] | None:
+    """Legend-driven AREA-material callouts present on the sheet — the codes that
+    should drive zone (polygon area) detection.
+
+    A code FAMILY counts as AREA when at least one of its codes is named in the
+    `materials` legend and that name classifies as an area material (paving, tile,
+    turf, concrete, gravel …). Every callout code sharing that family letter is
+    then included — so a tile `T.2` rides in on `T.1`'s legend entry even when only
+    `T.1` is spelled out in the schedule. Linear families (walls/edging) and count
+    families (site furnishings `SF`, benches, lights) are excluded, so they can
+    neither be measured as areas nor steal a neighbouring area zone.
+
+    Returns the sorted area codes, or None when no family can be confirmed as area
+    (the caller then keeps its existing behaviour — no zone-code filter). This is
+    deterministic: it adds no Gemini call.
+
+    Single-family sheets are unaffected: Kirby's only legend family is `M` (paving)
+    so the result is exactly the `M.*` codes — same set the engine already used.
+    """
+    from .material_plan import classify_material
+
+    info = tag_families(raw_pdf, page, clip)
+    codes_by_fam: dict[str, set] = info["codes"]
+    if not codes_by_fam:
+        return None
+    mat = { _norm_code(k): v for k, v in (materials or {}).items() }
+
+    area_families: set[str] = set()
+    for letter, codeset in codes_by_fam.items():
+        for c in codeset:
+            name = mat.get(_norm_code(c))
+            if name and classify_material(name)["unit"] == "area":
+                area_families.add(letter)
+                break
+
+    if not area_families:
+        return None
+    out: list[str] = []
+    for letter in area_families:
+        out.extend(codes_by_fam[letter])
+    return sorted(out, key=_code_key)
+
+
+def area_tag_pattern(area_codes: list[str]) -> str:
+    """A tag regex that fully matches exactly the given codes' families, e.g.
+    ['P.1','T.2'] -> r'^\\(?((?:P|T)[-.]?\\d{1,2})\\)?$'. Lets the engine extract
+    every area family on a multi-material sheet while ignoring non-area callouts."""
+    letters = sorted({_code_key(c)[0] for c in area_codes})
+    alt = "|".join(re.escape(l) for l in letters)
+    return rf"^\(?((?:{alt})[-.]?\d{{1,2}})\)?$"
+
+
 def tag_config(raw_pdf: str, page: int, clip: dict | None = None) -> dict | None:
     """Build the engine tag settings for this sheet's material family — a regex
     that captures the FULL code (e.g. `A2`, `M.5`) so it matches the QTO codes."""

@@ -83,6 +83,37 @@ def stage1_config(job_id: str, filename: str) -> dict:
     return run_stage1_config(job_id, filename)
 
 
+def _apply_config_selection(job_id: str, status: dict, cfg: dict) -> None:
+    """Mutate `status` in place so the KEPT pages are exactly the takeoff-plan
+    sheets Gemini detected for the config — the config's per-sheet vision detection
+    ('material/hardscape plan sheets, not detail/section/grading') is the reliable
+    'which sheets to take off'. No-op when the config is the fallback (Gemini
+    unavailable) so the heuristic selection survives. Caller writes the status."""
+    if cfg.get("source") != "gemini":
+        return
+    sheets = cfg.get("sheets") or {}
+    # config sheet 'page' is the 1-based page number shown on the rendered label
+    keep_idx = {int(info["page"]) - 1 for info in sheets.values()
+                if isinstance(info.get("page"), (int, float))}
+    if not keep_idx or not status.get("pages"):
+        return
+    for p in status["pages"]:
+        idx = int(p.get("index", -1))
+        hit = idx in keep_idx
+        p["keep"] = hit
+        if hit:
+            p["pool_style"] = False
+            p["reason"] = "Gemini-detected takeoff plan"
+            if not p.get("thumb"):
+                out = store.thumbs_dir(job_id) / f"p{idx}.png"
+                try:
+                    selection.render_thumb(str(store.pdf_path(job_id)), idx, out)
+                    p["thumb"] = f"thumbs/p{idx}.png"
+                except Exception:  # noqa: BLE001 — thumb is best-effort
+                    pass
+    status["kept_count"] = sum(1 for p in status["pages"] if p.get("keep"))
+
+
 def run_stage1_config(job_id: str, filename: str) -> dict:
     import os
     from dotenv import load_dotenv
@@ -108,7 +139,10 @@ def run_stage1_config(job_id: str, filename: str) -> dict:
             cfg["pool_scope"] = scope
             store.write_config(job_id, cfg)
 
+    # Atomic final write: sync the page selection to the config detection AND
+    # mark config done in one write, so it can't race the Stage-1 selection write.
     cur = store.read_status(job_id) or {}
+    _apply_config_selection(job_id, cur, cfg)
     cur["config_status"] = "done"
     store.write_status(job_id, cur)
     st.update(status="done", sheets=list(cfg.get("sheets", {})), source=cfg.get("source"))
